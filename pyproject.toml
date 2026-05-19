@@ -1,0 +1,57 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "llm-sanitizer-pro"
+version = "3.0.0"
+description = "Production-grade, modular dataset sanitization and curation for LLM training."
+readme = "README.md"
+requires-python = ">=3.9"
+license = {text = "MIT"}
+authors = [{name = "Sanitize Pro Contributors"}]
+keywords = ["llm", "dataset", "sanitization", "pii", "deduplication", "nlp"]
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+dependencies = [
+    "tqdm>=4.60.0",
+]
+
+[project.optional-dependencies]
+all = [
+    "pandas>=2.0.0",
+    "openpyxl>=3.1.0",
+    "xlsxwriter>=3.1.0",
+    "ijson>=3.2.0",
+    "langdetect>=1.0.9",
+    "pyyaml>=6.0",
+    "pyarrow>=14.0.0",
+    "datasketch>=1.6.0",
+    "transformers>=4.30.0",
+]
+dev = [
+    "ruff>=0.1.0",
+    "mypy>=1.5.0",
+    "pytest>=7.4.0",
+]
+
+[project.scripts]
+sanitize = "sanitize_pro.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["sanitize_pro*"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py39"
+
+[tool.mypy]
+python_version = "3.9"
+strict = true
+warn_return_any = true
+warn_unused_configs = true
