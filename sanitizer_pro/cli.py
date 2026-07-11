@@ -7,7 +7,7 @@ import os
 import random
 import sys
 from pathlib import Path
-from typing import Any, Callable, Dict, Iterator, List, Optional, Set, Tuple
+from typing import Any, Dict, Iterator, List, Optional
 
 try:
     from tqdm import tqdm as _tqdm
@@ -30,21 +30,20 @@ except ImportError:
     pd = None  # type: ignore[assignment]
     PANDAS_AVAILABLE = False
 
-from sanitize_pro.utils import (
-    FilterReason, ConfigurationError, InputFormatError, 
-    _STDIN, _STDOUT, _EXCEL_WARN_MB_DEFAULT, _MAX_DEPTH_DEFAULT,
-    _ALLCAPS_MIN_LEN_DEFAULT, _ALLCAPS_MIN_ALPHA_DEFAULT, get_file_format, resolve_fmt
+from sanitizer_pro.utils import (
+    FilterReason, ConfigurationError, _STDIN, _STDOUT, _EXCEL_WARN_MB_DEFAULT, _MAX_DEPTH_DEFAULT,
+    _ALLCAPS_MIN_LEN_DEFAULT, _ALLCAPS_MIN_ALPHA_DEFAULT, resolve_fmt
 )
-from sanitize_pro.config import (
+from sanitizer_pro.config import (
     load_config_file, collect_explicit_args, apply_config_to_args,
     load_custom_pii_patterns, load_field_config, build_field_ops, load_quality_script
 )
-from sanitize_pro.core import sanitize_record, TokenTruncator, get_record_hash
-from sanitize_pro.dedup import make_deduper
-from sanitize_pro.pii import PseudoRegistry
-from sanitize_pro.io.readers import read_records
-from sanitize_pro.io.writers import StreamingWriter, ShardedWriter, SplitWriter, parse_split_spec
-from sanitize_pro.worker import _worker_init, _worker_fn
+from sanitizer_pro.core import sanitize_record, TokenTruncator, get_record_hash
+from sanitizer_pro.dedup import make_deduper
+from sanitizer_pro.pii import PseudoRegistry
+from sanitizer_pro.io.readers import read_records
+from sanitizer_pro.io.writers import StreamingWriter, ShardedWriter, SplitWriter, parse_split_spec
+from sanitizer_pro.worker import _worker_init, _worker_fn
 
 # =============================================================================
 # Constants
@@ -132,7 +131,9 @@ def resolve_excel_sheet(
 ) -> Any:
     if sheet_name is not None and sheet_index is not None:
         raise ConfigurationError("--excel-sheet-name and --excel-sheet-index are mutually exclusive.")
-    
+    if sheet_index is not None and sheet_index < 0:
+        raise ConfigurationError("--excel-sheet-index must be >= 0.")
+
     resolved: Any = sheet_name if sheet_name is not None else (sheet_index if sheet_index is not None else 0)
     
     if input_path and input_path not in {_STDIN}:
@@ -206,6 +207,8 @@ def build_parser() -> argparse.ArgumentParser:
     fg = parser.add_argument_group('Features')
     fg.add_argument('--deduplicate', action='store_true')
     fg.add_argument('--fuzzy-dedup', action='store_true', help='Use MinHash+LSH for near-duplicate detection.')
+    fg.add_argument('--fuzzy-threshold', type=float, default=0.8, metavar='T',
+                    help='Jaccard similarity threshold for --fuzzy-dedup (0-1, default 0.8).')
     fg.add_argument('--dedup-fields', default='')
     fg.add_argument('--dedup-normalize', action='store_true')
     fg.add_argument('--dedup-backend', default='memory', choices=['memory', 'sqlite'])
@@ -267,8 +270,17 @@ def main() -> None:
     args = parser.parse_args()
 
     if args.generate_config is not None:
-        # Simplified template generation for brevity in CLI execution
-        print(json.dumps({a.dest: a.default for a in parser._actions if a.dest != 'help' and a.default is not None}, indent=2))
+        template = {a.dest: a.default for a in parser._actions
+                    if a.dest not in {'help', 'generate_config', 'config'} and a.default is not None}
+        if args.generate_config == 'yaml':
+            try:
+                import yaml as _yaml
+                print(_yaml.safe_dump(template, sort_keys=True, default_flow_style=False))
+            except ImportError:
+                logging.warning("pyyaml not installed; emitting JSON instead.")
+                print(json.dumps(template, indent=2))
+        else:
+            print(json.dumps(template, indent=2))
         sys.exit(0)
 
     if args.input is None or args.output is None:
@@ -283,12 +295,17 @@ def main() -> None:
             print(f"ERROR loading config: {exc}", file=sys.stderr)
             sys.exit(1)
 
-    # Derived lists
-    args.text_fields_list = [f.strip() for f in args.text_fields.split(',') if f.strip()] or None
-    args.dedup_fields_list = [f.strip() for f in args.dedup_fields.split(',') if f.strip()] or None
-    args.csv_columns_list = [c.strip() for c in args.csv_columns.split(',') if c.strip()] or None
-    args.require_fields_list = [f.strip() for f in args.require_fields.split(',') if f.strip()] or None
-    lang_filter_set = {c.strip().lower() for c in args.lang_filter.split(',') if c.strip()} or None
+    # Derived lists (config files may supply these as real lists already)
+    def _as_list(v: Any) -> Optional[List[str]]:
+        if isinstance(v, (list, tuple)):
+            return [str(x).strip() for x in v if str(x).strip()] or None
+        return [f.strip() for f in str(v or '').split(',') if f.strip()] or None
+
+    args.text_fields_list = _as_list(args.text_fields)
+    args.dedup_fields_list = _as_list(args.dedup_fields)
+    args.csv_columns_list = _as_list(args.csv_columns)
+    args.require_fields_list = _as_list(args.require_fields)
+    lang_filter_set = set(x.lower() for x in _as_list(args.lang_filter) or []) or None
 
     if args.debug_records:
         args.log_level = 'DEBUG'
@@ -320,6 +337,16 @@ def main() -> None:
         logging.error("--jobs must be >= 1."); sys.exit(1)
     if args.pii_pseudonymize and args.jobs > 1:
         logging.error("--pii-pseudonymize is not supported with --jobs > 1."); sys.exit(1)
+    if args.shard_size is not None and args.shard_size < 1:
+        logging.error("--shard-size must be >= 1."); sys.exit(1)
+    if not (0 < args.fuzzy_threshold <= 1):
+        logging.error("--fuzzy-threshold must be in (0, 1]."); sys.exit(1)
+    if lang_filter_set:
+        from sanitizer_pro.quality import LANGDETECT_AVAILABLE
+        if not LANGDETECT_AVAILABLE:
+            logging.error("--lang-filter requires langdetect (pip install langdetect); "
+                          "without it every record would be filtered out.")
+            sys.exit(1)
 
     split_spec: Optional[Dict[str, float]] = None
     if args.split:
@@ -356,16 +383,23 @@ def main() -> None:
             logging.error("Cannot detect output format. Supply --output-format."); sys.exit(1)
 
     # Load optional resources
-    extra_pii = load_custom_pii_patterns(args.pii_patterns_file) if args.pii_patterns_file else None
-    field_ops = build_field_ops(load_field_config(args.field_config)) if args.field_config else None
-    quality_fn = load_quality_script(args.quality_script) if args.quality_script else None
+    try:
+        extra_pii = load_custom_pii_patterns(args.pii_patterns_file) if args.pii_patterns_file else None
+        field_ops = build_field_ops(load_field_config(args.field_config)) if args.field_config else None
+        quality_fn = load_quality_script(args.quality_script) if args.quality_script else None
+    except Exception as exc:
+        logging.error(f"Failed to load auxiliary config: {exc}"); sys.exit(1)
     truncator = TokenTruncator(args.max_tokens, args.tokenizer) if args.max_tokens else None
     pseudo_registry = PseudoRegistry() if args.pii_pseudonymize else None
 
     logging.info(f"Start: {args.input} ({input_fmt}) → {args.output} ({output_fmt}) | jobs={args.jobs}")
 
     no_output = args.dry_run or args.stats_only
-    deduper = make_deduper(args.dedup_backend, args.dedup_db_path, fuzzy=args.fuzzy_dedup) if (args.deduplicate or args.fuzzy_dedup) else None
+    try:
+        deduper = make_deduper(args.dedup_backend, args.dedup_db_path, fuzzy=args.fuzzy_dedup,
+                               fuzzy_threshold=args.fuzzy_threshold) if (args.deduplicate or args.fuzzy_dedup) else None
+    except ImportError as exc:
+        logging.error(str(exc)); sys.exit(1)
     run_stats = RunStats()
 
     try:
@@ -412,20 +446,38 @@ def main() -> None:
 
     def _process(writer: Any) -> None:
         if args.jobs > 1:
+            def _dispatchable() -> Iterator[Dict[str, Any]]:
+                # Filter non-dict records in the parent so `malformed` stays accurate.
+                for rec in record_iter:
+                    if isinstance(rec, dict):
+                        yield rec
+                    else:
+                        run_stats.total += 1
+                        run_stats.malformed += 1
+
             pool = multiprocessing.Pool(
                 processes=args.jobs, initializer=_worker_init,
                 initargs=(args, extra_pii, lang_filter_set, field_ops, args.require_fields_list, args.text_fields_list)
             )
+            stopped_early = False
             try:
-                imap_iter = pool.imap(_worker_fn, record_iter, chunksize=args.chunk_size)
+                imap_iter = pool.imap(_worker_fn, _dispatchable(), chunksize=args.chunk_size)
                 if use_progress:
                     imap_iter = _tqdm(imap_iter, desc="Processing", unit="rec", dynamic_ncols=True, smoothing=0.1)
                 for sanitized, reason, quality_text, lang in imap_iter:
                     run_stats.total += 1
-                    if args.dry_run and run_stats.total > args.dry_run_size: break
+                    if args.dry_run and run_stats.total > args.dry_run_size:
+                        stopped_early = True
+                        break
                     _handle(sanitized, reason, quality_text, lang, writer)
+            except BaseException:
+                stopped_early = True
+                raise
             finally:
-                pool.terminate()
+                if stopped_early:
+                    pool.terminate()
+                else:
+                    pool.close()
                 pool.join()
             return
 
@@ -489,9 +541,13 @@ def main() -> None:
         f"Total records processed : {total:,}",
         f"Kept                    : {kept:,}  ({kept_pct:.2f}%)",
         f"Filtered (quality)      : {run_stats.filtered_quality:,}",
+        f"Filtered (language)     : {run_stats.filtered_lang:,}",
+        f"Filtered (require)      : {run_stats.filtered_require:,}",
         f"Filtered (code)         : {run_stats.filtered_code:,}",
         f"Filtered (profanity)    : {run_stats.filtered_profanity:,}",
         f"Deduplicated            : {run_stats.deduplicated:,}",
+        f"Malformed               : {run_stats.malformed:,}",
+        f"Sampled out             : {run_stats.sampled_out:,}",
         sep
     ]
     print('\n'.join(lines), file=sys.stderr)

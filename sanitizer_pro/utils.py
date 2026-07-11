@@ -1,10 +1,9 @@
 """Shared utilities, constants, and custom exceptions."""
 import enum
 import gzip
-import logging
 import sys
 from pathlib import Path
-from typing import Any, Dict, Iterator, Optional, TextIO
+from typing import Optional, TextIO
 
 class FilterReason(enum.Enum):
     QUALITY = 'quality'

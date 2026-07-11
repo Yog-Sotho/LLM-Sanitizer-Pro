@@ -4,9 +4,9 @@ import logging
 import sys
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
-from sanitize_pro.core import sanitize_record, TokenTruncator, FieldOps
-from sanitize_pro.utils import FilterReason
-from sanitize_pro.config import load_quality_script
+from sanitizer_pro.core import sanitize_record, TokenTruncator, FieldOps
+from sanitizer_pro.utils import FilterReason
+from sanitizer_pro.config import load_quality_script
 
 _w_args: Optional[argparse.Namespace] = None
 _w_extra_pii: Optional[List] = None
