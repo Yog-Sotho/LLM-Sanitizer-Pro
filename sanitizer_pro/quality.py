@@ -1,10 +1,11 @@
 """Quality scoring, language detection, and content filtering."""
 import argparse
 import re
-from typing import Any, Callable, Dict, List, Optional, Set, Tuple
+from typing import Any, List, Optional, Tuple
 
 try:
-    from langdetect import detect_langs, LangDetectException
+    from langdetect import detect_langs, DetectorFactory
+    DetectorFactory.seed = 0  # langdetect is nondeterministic without a fixed seed
     LANGDETECT_AVAILABLE = True
 except ImportError:
     LANGDETECT_AVAILABLE = False
@@ -67,14 +68,29 @@ def detect_language(text: str, min_confidence: float = 0.0) -> Tuple[Optional[st
     except Exception:
         return None, 0.0
 
+_CODE_KEYWORD_REGEX = re.compile(
+    r'(?:^|\n)\s*(?:def |class \w+[:(]|function\s*\w*\s*\(|import \w+|from \w+ import '
+    r'|#include\s*<|public static void|const \w+\s*=|let \w+\s*=|var \w+\s*=)'
+    r'|console\.log\(|require\([\'"]|=>\s*{|;\s*\n'
+)
+
 def is_code_heuristic(text: str) -> bool:
-    """Fast heuristic for code detection based on symbol density and keywords."""
+    """Fast heuristic for code detection based on symbol density and structure."""
     if not text: return False
     code_chars = sum(1 for c in text if c in '{}[]();=<>')
     if code_chars / len(text) > 0.05: return True
-    keywords = {'def ', 'function ', 'import ', 'require(', 'console.log', 'public static void'}
-    return any(kw in text for kw in keywords)
+    return bool(_CODE_KEYWORD_REGEX.search(text))
 
-_PROFANITY_REGEX = re.compile(r'\b(badword1|badword2)\b', re.IGNORECASE) # Placeholder regex
+# Compact default list targeting common English slurs/profanity. Kept intentionally
+# small and high-precision; extend per-deployment via --pii-patterns-file style
+# custom lists or a quality script for stricter policies.
+_PROFANITY_WORDS = (
+    'fuck', 'fucking', 'fucker', 'motherfucker', 'shit', 'bullshit', 'asshole',
+    'bitch', 'bastard', 'cunt', 'dickhead', 'wanker', 'slut', 'whore', 'faggot',
+    'nigger', 'nigga', 'retard', 'douchebag', 'jackass', 'prick', 'twat',
+)
+_PROFANITY_REGEX = re.compile(
+    r'\b(?:' + '|'.join(re.escape(w) for w in _PROFANITY_WORDS) + r')\b', re.IGNORECASE)
+
 def contains_profanity(text: str) -> bool:
     return bool(_PROFANITY_REGEX.search(text))

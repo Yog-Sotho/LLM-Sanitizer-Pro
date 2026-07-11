@@ -7,7 +7,7 @@ import os
 import random
 import sys
 from pathlib import Path
-from typing import Any, Callable, Dict, Iterator, List, Optional, Set, Tuple
+from typing import Any, Dict, Iterator, List, Optional, Tuple
 
 try:
     from tqdm import tqdm as _tqdm
@@ -30,21 +30,20 @@ except ImportError:
     pd = None  # type: ignore[assignment]
     PANDAS_AVAILABLE = False
 
-from sanitize_pro.utils import (
-    FilterReason, ConfigurationError, InputFormatError, 
-    _STDIN, _STDOUT, _EXCEL_WARN_MB_DEFAULT, _MAX_DEPTH_DEFAULT,
-    _ALLCAPS_MIN_LEN_DEFAULT, _ALLCAPS_MIN_ALPHA_DEFAULT, get_file_format, resolve_fmt
+from sanitizer_pro.utils import (
+    FilterReason, ConfigurationError, _STDIN, _STDOUT, _EXCEL_WARN_MB_DEFAULT, _MAX_DEPTH_DEFAULT,
+    _ALLCAPS_MIN_LEN_DEFAULT, _ALLCAPS_MIN_ALPHA_DEFAULT, resolve_fmt
 )
-from sanitize_pro.config import (
+from sanitizer_pro.config import (
     load_config_file, collect_explicit_args, apply_config_to_args,
     load_custom_pii_patterns, load_field_config, build_field_ops, load_quality_script
 )
-from sanitize_pro.core import sanitize_record, TokenTruncator, get_record_hash
-from sanitize_pro.dedup import make_deduper
-from sanitize_pro.pii import PseudoRegistry
-from sanitize_pro.io.readers import read_records
-from sanitize_pro.io.writers import StreamingWriter, ShardedWriter, SplitWriter, parse_split_spec
-from sanitize_pro.worker import _worker_init, _worker_fn
+from sanitizer_pro.core import sanitize_record, TokenTruncator, get_record_hash
+from sanitizer_pro.dedup import make_deduper
+from sanitizer_pro.pii import PseudoRegistry
+from sanitizer_pro.io.readers import read_records
+from sanitizer_pro.io.writers import StreamingWriter, ShardedWriter, SplitWriter, parse_split_spec
+from sanitizer_pro.worker import _worker_init, _worker_fn
 
 # =============================================================================
 # Constants
@@ -86,6 +85,13 @@ class RunStats:
         self.filtered_require = 0
         self.filtered_code = 0
         self.filtered_profanity = 0
+        self.filtered_contaminated = 0
+        self.filtered_chat = 0
+        self.chat_invalid_reasons: Dict[str, int] = {}
+        self.filtered_low_score = 0
+        self.score_hist: Dict[int, int] = {}
+        self.score_sum = 0.0
+        self.score_count = 0
         self.deduplicated = 0
         self.malformed = 0
         self.sampled_out = 0
@@ -104,6 +110,12 @@ class RunStats:
         if lang:
             self.lang_dist[lang] = self.lang_dist.get(lang, 0) + 1
 
+    def record_score(self, score: float) -> None:
+        bucket = min(9, int(score * 10))
+        self.score_hist[bucket] = self.score_hist.get(bucket, 0) + 1
+        self.score_sum += score
+        self.score_count += 1
+
     def to_dict(self) -> Dict[str, Any]:
         total = self.total or 1
         return {
@@ -115,6 +127,15 @@ class RunStats:
             'filtered_require': self.filtered_require,
             'filtered_code': self.filtered_code,
             'filtered_profanity': self.filtered_profanity,
+            'filtered_contaminated': self.filtered_contaminated,
+            'filtered_chat_invalid': self.filtered_chat,
+            'chat_invalid_reasons': dict(sorted(self.chat_invalid_reasons.items(),
+                                                key=lambda x: -x[1])),
+            'filtered_low_score': self.filtered_low_score,
+            'quality_score_mean': (round(self.score_sum / self.score_count, 4)
+                                   if self.score_count else None),
+            'quality_score_histogram': {f"{b / 10:.1f}": self.score_hist[b]
+                                        for b in sorted(self.score_hist)},
             'deduplicated': self.deduplicated,
             'malformed': self.malformed,
             'sampled_out': self.sampled_out,
@@ -132,7 +153,9 @@ def resolve_excel_sheet(
 ) -> Any:
     if sheet_name is not None and sheet_index is not None:
         raise ConfigurationError("--excel-sheet-name and --excel-sheet-index are mutually exclusive.")
-    
+    if sheet_index is not None and sheet_index < 0:
+        raise ConfigurationError("--excel-sheet-index must be >= 0.")
+
     resolved: Any = sheet_name if sheet_name is not None else (sheet_index if sheet_index is not None else 0)
     
     if input_path and input_path not in {_STDIN}:
@@ -201,11 +224,25 @@ def build_parser() -> argparse.ArgumentParser:
     qg.add_argument('--lang-confidence', type=float, default=0.0)
     qg.add_argument('--reject-code', action='store_true', help='Reject records detected as code snippets.')
     qg.add_argument('--reject-profanity', action='store_true', help='Reject records containing profanity.')
+    qg.add_argument('--quality-scorer', default='heuristic', choices=['heuristic', 'perplexity'],
+                    help='Scoring backend for --quality-min-score / --keep-top-percent / '
+                         '--quality-score-field (default: heuristic, no dependencies).')
+    qg.add_argument('--quality-model', default=None, metavar='NAME',
+                    help='Causal LM for the perplexity scorer (default: distilgpt2).')
+    qg.add_argument('--quality-min-score', type=float, default=None, metavar='X',
+                    help='Reject records with quality score < X (scores are in [0, 1]).')
+    qg.add_argument('--keep-top-percent', type=float, default=None, metavar='P',
+                    help='Keep only the best P%% of surviving records by quality score. '
+                         'Buffers survivors in memory; output order is preserved.')
+    qg.add_argument('--quality-score-field', default=None, metavar='FIELD',
+                    help='Annotate each output record with its quality score in FIELD.')
 
     # Features
     fg = parser.add_argument_group('Features')
     fg.add_argument('--deduplicate', action='store_true')
     fg.add_argument('--fuzzy-dedup', action='store_true', help='Use MinHash+LSH for near-duplicate detection.')
+    fg.add_argument('--fuzzy-threshold', type=float, default=0.8, metavar='T',
+                    help='Jaccard similarity threshold for --fuzzy-dedup (0-1, default 0.8).')
     fg.add_argument('--dedup-fields', default='')
     fg.add_argument('--dedup-normalize', action='store_true')
     fg.add_argument('--dedup-backend', default='memory', choices=['memory', 'sqlite'])
@@ -215,6 +252,14 @@ def build_parser() -> argparse.ArgumentParser:
     fg.add_argument('--pii-pseudonymize', action='store_true')
     fg.add_argument('--pseudo-map-file', default=None, metavar='PATH')
     fg.add_argument('--pii-patterns-file', default=None, metavar='PATH')
+    fg.add_argument('--pii-ner', action='store_true',
+                    help='Also detect PII with a named-entity model (person names by default). '
+                         'Requires spacy (+en_core_web_sm) or transformers.')
+    fg.add_argument('--pii-ner-backend', default='auto', choices=['auto', 'spacy', 'transformers'])
+    fg.add_argument('--pii-ner-entities', default='person', metavar='KINDS',
+                    help='Comma-separated entity kinds to redact: person,location,org (default: person).')
+    fg.add_argument('--pii-ner-model', default=None, metavar='NAME',
+                    help='Override the NER model (spaCy model name or HF model id).')
     fg.add_argument('--clean-html', action='store_true')
     fg.add_argument('--paragraph-mode', action='store_true')
     fg.add_argument('--txt-fallback-field', default=None, metavar='FIELD')
@@ -227,6 +272,37 @@ def build_parser() -> argparse.ArgumentParser:
     fg.add_argument('--quick', action='store_true')
     fg.add_argument('--format-chatml', action='store_true', help='Format output as ChatML messages.')
     fg.add_argument('--format-instruct', action='store_true', help='Format output as Alpaca/Instruct schema.')
+
+    # Decontamination
+    dg = parser.add_argument_group('Benchmark Decontamination')
+    dg.add_argument('--decontaminate', default=None, metavar='NAMES',
+                    help="Comma-separated benchmark names to decontaminate against "
+                         "(e.g. mmlu,gsm8k), 'all', or 'list' to show available benchmarks. "
+                         "Test sets are downloaded from the Hugging Face Hub and cached.")
+    dg.add_argument('--decontam-refs', default=None, metavar='PATHS',
+                    help='Comma-separated local reference files (any supported input format) '
+                         'whose text is treated as benchmark material.')
+    dg.add_argument('--decontam-ngram', type=int, default=8, metavar='N',
+                    help='Word n-gram size for overlap detection (default 8).')
+    dg.add_argument('--decontam-min-hits', type=int, default=1, metavar='N',
+                    help='Minimum colliding n-grams to flag a record (default 1).')
+    dg.add_argument('--decontam-cache', default=None, metavar='DIR',
+                    help='Benchmark download cache dir (default ~/.cache/llm-sanitizer-pro/benchmarks).')
+
+    # Chat validation
+    cg = parser.add_argument_group('Chat Dataset Validation')
+    cg.add_argument('--validate-chat', action='store_true',
+                    help='Reject records whose "messages" structure is invalid for chat '
+                         'fine-tuning (role alternation, empty turns, no assistant reply, …). '
+                         'Combine with --format-chatml to convert first, then validate.')
+    cg.add_argument('--chat-lenient', action='store_true',
+                    help='Only structural checks (schema, known roles, non-empty content, '
+                         'assistant present); skip ordering/alternation rules.')
+    cg.add_argument('--chat-max-tokens', type=int, default=None, metavar='N',
+                    help='Reject conversations whose total content exceeds N tokens '
+                         '(counted with --tokenizer).')
+    cg.add_argument('--chat-roles', default='system,user,assistant', metavar='ROLES',
+                    help='Comma-separated allowed roles (default: system,user,assistant).')
 
     # CSV / Excel
     iog = parser.add_argument_group('CSV / Excel Options')
@@ -267,8 +343,23 @@ def main() -> None:
     args = parser.parse_args()
 
     if args.generate_config is not None:
-        # Simplified template generation for brevity in CLI execution
-        print(json.dumps({a.dest: a.default for a in parser._actions if a.dest != 'help' and a.default is not None}, indent=2))
+        template = {a.dest: a.default for a in parser._actions
+                    if a.dest not in {'help', 'generate_config', 'config'} and a.default is not None}
+        if args.generate_config == 'yaml':
+            try:
+                import yaml as _yaml
+                print(_yaml.safe_dump(template, sort_keys=True, default_flow_style=False))
+            except ImportError:
+                logging.warning("pyyaml not installed; emitting JSON instead.")
+                print(json.dumps(template, indent=2))
+        else:
+            print(json.dumps(template, indent=2))
+        sys.exit(0)
+
+    if args.decontaminate and args.decontaminate.strip().lower() == 'list':
+        from sanitizer_pro.decontam import KNOWN_BENCHMARKS
+        for name, spec in sorted(KNOWN_BENCHMARKS.items()):
+            print(f"{name:<12} {spec.repo:<40} {spec.note}")
         sys.exit(0)
 
     if args.input is None or args.output is None:
@@ -283,12 +374,17 @@ def main() -> None:
             print(f"ERROR loading config: {exc}", file=sys.stderr)
             sys.exit(1)
 
-    # Derived lists
-    args.text_fields_list = [f.strip() for f in args.text_fields.split(',') if f.strip()] or None
-    args.dedup_fields_list = [f.strip() for f in args.dedup_fields.split(',') if f.strip()] or None
-    args.csv_columns_list = [c.strip() for c in args.csv_columns.split(',') if c.strip()] or None
-    args.require_fields_list = [f.strip() for f in args.require_fields.split(',') if f.strip()] or None
-    lang_filter_set = {c.strip().lower() for c in args.lang_filter.split(',') if c.strip()} or None
+    # Derived lists (config files may supply these as real lists already)
+    def _as_list(v: Any) -> Optional[List[str]]:
+        if isinstance(v, (list, tuple)):
+            return [str(x).strip() for x in v if str(x).strip()] or None
+        return [f.strip() for f in str(v or '').split(',') if f.strip()] or None
+
+    args.text_fields_list = _as_list(args.text_fields)
+    args.dedup_fields_list = _as_list(args.dedup_fields)
+    args.csv_columns_list = _as_list(args.csv_columns)
+    args.require_fields_list = _as_list(args.require_fields)
+    lang_filter_set = set(x.lower() for x in _as_list(args.lang_filter) or []) or None
 
     if args.debug_records:
         args.log_level = 'DEBUG'
@@ -314,12 +410,27 @@ def main() -> None:
     # Validation
     if args.pii_mask and not args.remove_pii: logging.warning("--pii-mask has no effect without --remove-pii.")
     if args.pii_pseudonymize and not args.remove_pii: logging.warning("--pii-pseudonymize has no effect without --remove-pii.")
+    if args.pii_ner and not args.remove_pii: logging.warning("--pii-ner has no effect without --remove-pii.")
     if args.sample is not None and not (0 < args.sample <= 1.0):
         logging.error("--sample must be in (0, 1]."); sys.exit(1)
     if args.jobs < 1:
         logging.error("--jobs must be >= 1."); sys.exit(1)
     if args.pii_pseudonymize and args.jobs > 1:
         logging.error("--pii-pseudonymize is not supported with --jobs > 1."); sys.exit(1)
+    if args.shard_size is not None and args.shard_size < 1:
+        logging.error("--shard-size must be >= 1."); sys.exit(1)
+    if not (0 < args.fuzzy_threshold <= 1):
+        logging.error("--fuzzy-threshold must be in (0, 1]."); sys.exit(1)
+    if args.quality_min_score is not None and not (0 <= args.quality_min_score <= 1):
+        logging.error("--quality-min-score must be in [0, 1]."); sys.exit(1)
+    if args.keep_top_percent is not None and not (0 < args.keep_top_percent <= 100):
+        logging.error("--keep-top-percent must be in (0, 100]."); sys.exit(1)
+    if lang_filter_set:
+        from sanitizer_pro.quality import LANGDETECT_AVAILABLE
+        if not LANGDETECT_AVAILABLE:
+            logging.error("--lang-filter requires langdetect (pip install langdetect); "
+                          "without it every record would be filtered out.")
+            sys.exit(1)
 
     split_spec: Optional[Dict[str, float]] = None
     if args.split:
@@ -356,16 +467,76 @@ def main() -> None:
             logging.error("Cannot detect output format. Supply --output-format."); sys.exit(1)
 
     # Load optional resources
-    extra_pii = load_custom_pii_patterns(args.pii_patterns_file) if args.pii_patterns_file else None
-    field_ops = build_field_ops(load_field_config(args.field_config)) if args.field_config else None
-    quality_fn = load_quality_script(args.quality_script) if args.quality_script else None
+    try:
+        extra_pii = load_custom_pii_patterns(args.pii_patterns_file) if args.pii_patterns_file else None
+        field_ops = build_field_ops(load_field_config(args.field_config)) if args.field_config else None
+        quality_fn = load_quality_script(args.quality_script) if args.quality_script else None
+    except Exception as exc:
+        logging.error(f"Failed to load auxiliary config: {exc}"); sys.exit(1)
     truncator = TokenTruncator(args.max_tokens, args.tokenizer) if args.max_tokens else None
     pseudo_registry = PseudoRegistry() if args.pii_pseudonymize else None
+
+    ner_redactor = None
+    if args.pii_ner and args.remove_pii:
+        from sanitizer_pro.ner import NERRedactor
+        try:
+            # Built here even for --jobs > 1 (workers reload their own copy) so
+            # a missing backend fails fast with a clear message.
+            ner_redactor = NERRedactor(backend=args.pii_ner_backend,
+                                       entities=str(args.pii_ner_entities).split(','),
+                                       model=args.pii_ner_model)
+        except (ConfigurationError, ImportError) as exc:
+            logging.error(str(exc)); sys.exit(1)
+
+    quality_scorer = None
+    if (args.quality_min_score is not None or args.keep_top_percent is not None
+            or args.quality_score_field):
+        from sanitizer_pro.scoring import make_scorer
+        try:
+            quality_scorer = make_scorer(args.quality_scorer, model=args.quality_model)
+        except (ConfigurationError, ImportError) as exc:
+            logging.error(str(exc)); sys.exit(1)
+        logging.info(f"Quality scorer ready: {quality_scorer.backend_name}")
+        if args.keep_top_percent is not None:
+            logging.info(f"--keep-top-percent {args.keep_top_percent}: surviving records "
+                         "are buffered in memory until end of input.")
+
+    chat_validator = None
+    if args.validate_chat:
+        from sanitizer_pro.chat import ChatValidator, make_token_counter
+        if args.chat_max_tokens is not None and args.chat_max_tokens < 1:
+            logging.error("--chat-max-tokens must be >= 1."); sys.exit(1)
+        chat_validator = ChatValidator(
+            allowed_roles=str(args.chat_roles).split(','), lenient=args.chat_lenient,
+            max_tokens=args.chat_max_tokens,
+            token_counter=make_token_counter(args.tokenizer) if args.chat_max_tokens else None,
+        )
+        if not chat_validator.allowed_roles:
+            logging.error("--chat-roles must name at least one role."); sys.exit(1)
+
+    contamination_index = None
+    if args.decontaminate or args.decontam_refs:
+        from sanitizer_pro.decontam import build_index, resolve_benchmark_names
+        try:
+            contamination_index = build_index(
+                benchmarks=resolve_benchmark_names(args.decontaminate) if args.decontaminate else None,
+                ref_files=[p.strip() for p in args.decontam_refs.split(',') if p.strip()] if args.decontam_refs else None,
+                cache_dir=args.decontam_cache, ngram=args.decontam_ngram,
+                min_hits=args.decontam_min_hits, encoding=args.encoding,
+            )
+        except (ConfigurationError, ImportError) as exc:
+            logging.error(str(exc)); sys.exit(1)
+        except Exception as exc:
+            logging.error(f"Failed to build decontamination index: {exc}"); sys.exit(1)
 
     logging.info(f"Start: {args.input} ({input_fmt}) → {args.output} ({output_fmt}) | jobs={args.jobs}")
 
     no_output = args.dry_run or args.stats_only
-    deduper = make_deduper(args.dedup_backend, args.dedup_db_path, fuzzy=args.fuzzy_dedup) if (args.deduplicate or args.fuzzy_dedup) else None
+    try:
+        deduper = make_deduper(args.dedup_backend, args.dedup_db_path, fuzzy=args.fuzzy_dedup,
+                               fuzzy_threshold=args.fuzzy_threshold) if (args.deduplicate or args.fuzzy_dedup) else None
+    except ImportError as exc:
+        logging.error(str(exc)); sys.exit(1)
     run_stats = RunStats()
 
     try:
@@ -380,6 +551,10 @@ def main() -> None:
 
     use_progress = TQDM_AVAILABLE and not args.no_progress and not args.quiet and args.input != _STDIN
 
+    # (score, sanitized, quality_text, lang) survivors awaiting top-P% selection
+    topk_buffer: Optional[List[Tuple[Optional[float], Dict[str, Any], str, Optional[str]]]] = \
+        [] if args.keep_top_percent is not None else None
+
     def _handle(sanitized: Optional[Dict[str, Any]], reason: Optional[FilterReason], quality_text: str, lang: Optional[str], writer: Any) -> None:
         if sanitized is None:
             if reason == FilterReason.LANGUAGE: run_stats.filtered_lang += 1
@@ -388,6 +563,26 @@ def main() -> None:
             elif reason == FilterReason.PROFANITY: run_stats.filtered_profanity += 1
             else: run_stats.filtered_quality += 1
             return
+
+        if chat_validator is not None:
+            chat_reason = chat_validator.check(sanitized)
+            if chat_reason:
+                run_stats.filtered_chat += 1
+                run_stats.chat_invalid_reasons[chat_reason] = \
+                    run_stats.chat_invalid_reasons.get(chat_reason, 0) + 1
+                logging.debug(f"Chat validation rejected record: {chat_reason}")
+                return
+
+        if contamination_index is not None and contamination_index.is_contaminated(quality_text):
+            run_stats.filtered_contaminated += 1
+            return
+
+        score: Optional[float] = None
+        if quality_scorer is not None:
+            score = quality_scorer.score(quality_text)
+            if args.quality_min_score is not None and score < args.quality_min_score:
+                run_stats.filtered_low_score += 1
+                return
 
         if args.sample is not None and random.random() >= args.sample:
             run_stats.sampled_out += 1
@@ -406,26 +601,71 @@ def main() -> None:
                     return
                 deduper.add(h)
 
+        if topk_buffer is not None:
+            topk_buffer.append((score, sanitized, quality_text, lang))
+            return
+        _emit(score, sanitized, quality_text, lang, writer)
+
+    def _emit(score: Optional[float], sanitized: Dict[str, Any], quality_text: str,
+              lang: Optional[str], writer: Any) -> None:
+        if score is not None:
+            run_stats.record_score(score)
+            if args.quality_score_field:
+                sanitized[args.quality_score_field] = score
         run_stats.record_kept(quality_text, lang=lang)
         if writer is not None:
             writer.write(sanitized)
 
+    def _finalize(writer: Any) -> None:
+        """Drain the --keep-top-percent buffer: emit the best P% in input order."""
+        if topk_buffer is None:
+            return
+        if not topk_buffer:
+            return
+        n_keep = max(1, round(len(topk_buffer) * args.keep_top_percent / 100))
+        ranked = sorted(range(len(topk_buffer)),
+                        key=lambda i: topk_buffer[i][0], reverse=True)
+        keep_idx = set(ranked[:n_keep])
+        run_stats.filtered_low_score += len(topk_buffer) - n_keep
+        for i, (score, sanitized, quality_text, lang) in enumerate(topk_buffer):
+            if i in keep_idx:
+                _emit(score, sanitized, quality_text, lang, writer)
+        topk_buffer.clear()
+
     def _process(writer: Any) -> None:
         if args.jobs > 1:
+            def _dispatchable() -> Iterator[Dict[str, Any]]:
+                # Filter non-dict records in the parent so `malformed` stays accurate.
+                for rec in record_iter:
+                    if isinstance(rec, dict):
+                        yield rec
+                    else:
+                        run_stats.total += 1
+                        run_stats.malformed += 1
+
             pool = multiprocessing.Pool(
                 processes=args.jobs, initializer=_worker_init,
                 initargs=(args, extra_pii, lang_filter_set, field_ops, args.require_fields_list, args.text_fields_list)
             )
+            stopped_early = False
             try:
-                imap_iter = pool.imap(_worker_fn, record_iter, chunksize=args.chunk_size)
+                imap_iter = pool.imap(_worker_fn, _dispatchable(), chunksize=args.chunk_size)
                 if use_progress:
                     imap_iter = _tqdm(imap_iter, desc="Processing", unit="rec", dynamic_ncols=True, smoothing=0.1)
                 for sanitized, reason, quality_text, lang in imap_iter:
                     run_stats.total += 1
-                    if args.dry_run and run_stats.total > args.dry_run_size: break
+                    if args.dry_run and run_stats.total > args.dry_run_size:
+                        stopped_early = True
+                        break
                     _handle(sanitized, reason, quality_text, lang, writer)
+            except BaseException:
+                stopped_early = True
+                raise
             finally:
-                pool.terminate()
+                if stopped_early:
+                    pool.terminate()
+                else:
+                    pool.close()
                 pool.join()
             return
 
@@ -445,23 +685,28 @@ def main() -> None:
             sanitized, reason, quality_text, lang = sanitize_record(
                 record, args, text_fields=args.text_fields_list, extra_pii_patterns=extra_pii,
                 lang_filter=lang_filter_set, field_ops=field_ops, truncator=truncator,
-                pseudo_registry=pseudo_registry, require_fields=args.require_fields_list, quality_fn=quality_fn
+                pseudo_registry=pseudo_registry, require_fields=args.require_fields_list, quality_fn=quality_fn,
+                ner_redactor=ner_redactor
             )
             _handle(sanitized, reason, quality_text, lang, writer)
+
+    def _run(writer: Any) -> None:
+        _process(writer=writer)
+        _finalize(writer)
 
     writer_ctx: Any = None
     try:
         if no_output:
-            _process(writer=None)
+            _run(writer=None)
         elif split_spec:
             writer_ctx = SplitWriter(args.output, output_fmt, args.encoding, split_spec, txt_fallback_field=args.txt_fallback_field)
-            with writer_ctx as writer: _process(writer=writer)
+            with writer_ctx as writer: _run(writer=writer)
         elif args.shard_size:
             writer_ctx = ShardedWriter(args.output, output_fmt, args.encoding, args.shard_size, txt_fallback_field=args.txt_fallback_field)
-            with writer_ctx as writer: _process(writer=writer)
+            with writer_ctx as writer: _run(writer=writer)
         else:
             writer_ctx = StreamingWriter(args.output, output_fmt, args.encoding, txt_fallback_field=args.txt_fallback_field)
-            with writer_ctx as writer: _process(writer=writer)
+            with writer_ctx as writer: _run(writer=writer)
     except KeyboardInterrupt:
         logging.warning("Interrupted — flushing output …")
         if writer_ctx is not None and hasattr(writer_ctx, 'flush'): writer_ctx.flush()
@@ -489,11 +734,22 @@ def main() -> None:
         f"Total records processed : {total:,}",
         f"Kept                    : {kept:,}  ({kept_pct:.2f}%)",
         f"Filtered (quality)      : {run_stats.filtered_quality:,}",
+        f"Filtered (language)     : {run_stats.filtered_lang:,}",
+        f"Filtered (require)      : {run_stats.filtered_require:,}",
         f"Filtered (code)         : {run_stats.filtered_code:,}",
         f"Filtered (profanity)    : {run_stats.filtered_profanity:,}",
+        f"Filtered (contaminated) : {run_stats.filtered_contaminated:,}",
+        f"Filtered (chat-invalid) : {run_stats.filtered_chat:,}",
+        f"Filtered (low score)    : {run_stats.filtered_low_score:,}",
         f"Deduplicated            : {run_stats.deduplicated:,}",
+        f"Malformed               : {run_stats.malformed:,}",
+        f"Sampled out             : {run_stats.sampled_out:,}",
         sep
     ]
+    if run_stats.chat_invalid_reasons:
+        top = ', '.join(f"{k}={v}" for k, v in sorted(
+            run_stats.chat_invalid_reasons.items(), key=lambda x: -x[1])[:5])
+        lines.insert(-1, f"  chat-invalid breakdown: {top}")
     print('\n'.join(lines), file=sys.stderr)
 
     if args.stats_file:

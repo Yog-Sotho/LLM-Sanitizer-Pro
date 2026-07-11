@@ -5,9 +5,9 @@ import hashlib
 import re
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
-from sanitize_pro.utils import FilterReason, _MAX_DEPTH_DEFAULT
-from sanitize_pro.pii import clean_text, redact_pii, PseudoRegistry
-from sanitize_pro.quality import extract_text_for_quality, _check_quality_reason, detect_language, is_code_heuristic, contains_profanity
+from sanitizer_pro.utils import FilterReason, _MAX_DEPTH_DEFAULT
+from sanitizer_pro.pii import clean_text, redact_pii, PseudoRegistry
+from sanitizer_pro.quality import extract_text_for_quality, _check_quality_reason, detect_language, is_code_heuristic, contains_profanity
 
 FieldOps = Tuple[Dict[str, str], Set[str], Set[str], Set[str]]
 
@@ -19,7 +19,11 @@ class TokenTruncator:
             try:
                 from transformers import AutoTokenizer
                 self._hf = AutoTokenizer.from_pretrained(tokenizer_name)
-            except Exception: pass
+            except Exception as exc:
+                import logging
+                logging.warning(
+                    f"Could not load tokenizer '{tokenizer_name}' ({exc}); "
+                    "falling back to whitespace tokenization.")
 
     def truncate(self, text: str) -> str:
         if not text or self.max_tokens <= 0: return text
@@ -33,20 +37,26 @@ def _sanitize_value(
     v: Any, *, remove_html: bool, remove_pii: bool, pii_mask: bool,
     extra_pii: Optional[List], pseudo_registry: Optional[PseudoRegistry],
     field_pii_only: bool, field_no_clean: bool, max_depth: int,
-    truncator: Optional[TokenTruncator], _depth: int = 0
+    truncator: Optional[TokenTruncator], ner_redactor: Optional[Any] = None, _depth: int = 0
 ) -> Any:
     if _depth > max_depth: return v
     kw = dict(remove_html=remove_html, remove_pii=remove_pii, pii_mask=pii_mask,
               extra_pii=extra_pii, pseudo_registry=pseudo_registry,
               field_pii_only=field_pii_only, field_no_clean=field_no_clean,
-              max_depth=max_depth, truncator=truncator, _depth=_depth + 1)
-    
+              max_depth=max_depth, truncator=truncator, ner_redactor=ner_redactor,
+              _depth=_depth + 1)
+
     if isinstance(v, str):
         if field_no_clean: return v
         if field_pii_only:
-            return redact_pii(v, mask=pii_mask, extra_patterns=extra_pii, pseudo_registry=pseudo_registry) if remove_pii else v
+            if not remove_pii: return v
+            # NER runs first: the model should see natural text, not [PII_*] tokens.
+            if ner_redactor: v = ner_redactor.redact(v, mask=pii_mask, pseudo_registry=pseudo_registry)
+            return redact_pii(v, mask=pii_mask, extra_patterns=extra_pii, pseudo_registry=pseudo_registry)
         cleaned = clean_text(v, remove_html)
         if remove_pii:
+            if ner_redactor:
+                cleaned = ner_redactor.redact(cleaned, mask=pii_mask, pseudo_registry=pseudo_registry)
             cleaned = redact_pii(cleaned, mask=pii_mask, extra_patterns=extra_pii, pseudo_registry=pseudo_registry)
         if truncator: cleaned = truncator.truncate(cleaned)
         return cleaned
@@ -59,7 +69,7 @@ def sanitize_record(
     extra_pii_patterns: Optional[List] = None, lang_filter: Optional[Set[str]] = None,
     field_ops: Optional[FieldOps] = None, truncator: Optional[TokenTruncator] = None,
     pseudo_registry: Optional[PseudoRegistry] = None, require_fields: Optional[List[str]] = None,
-    quality_fn: Optional[Callable] = None
+    quality_fn: Optional[Callable] = None, ner_redactor: Optional[Any] = None
 ) -> Tuple[Optional[Dict[str, Any]], Optional[FilterReason], str, Optional[str]]:
     if not isinstance(record, dict):
         return None, FilterReason.QUALITY, '', None
@@ -73,7 +83,8 @@ def sanitize_record(
             val, remove_html=args.clean_html, remove_pii=args.remove_pii, pii_mask=args.pii_mask,
             extra_pii=extra_pii_patterns, pseudo_registry=pseudo_registry,
             field_pii_only=(fname in pii_only), field_no_clean=(fname in no_clean),
-            max_depth=getattr(args, 'max_depth', _MAX_DEPTH_DEFAULT), truncator=truncator
+            max_depth=getattr(args, 'max_depth', _MAX_DEPTH_DEFAULT), truncator=truncator,
+            ner_redactor=ner_redactor
         ) for fname, val in record.items()
     }
 
@@ -110,20 +121,24 @@ def sanitize_record(
     return sanitized, None, quality_text, detected_lang
 
 def format_chatml(record: Dict[str, Any]) -> Dict[str, Any]:
+    if isinstance(record.get("messages"), list):
+        return {"messages": record["messages"]}  # already conversational
     messages = []
-    if "system" in record: messages.append({"role": "system", "content": str(record["system"])})
-    if "instruction" in record or "input" in record:
-        user_content = str(record.get("instruction", ""))
-        if record.get("input"): user_content += f"\n{record['input']}"
-        messages.append({"role": "user", "content": user_content.strip()})
-    if "output" in record: messages.append({"role": "assistant", "content": str(record["output"])})
+    if record.get("system"): messages.append({"role": "system", "content": str(record["system"])})
+    user_content = str(record.get("instruction") or record.get("prompt") or record.get("question") or "")
+    if record.get("input"): user_content = f"{user_content}\n{record['input']}".strip()
+    if user_content: messages.append({"role": "user", "content": user_content.strip()})
+    assistant = record.get("output") or record.get("response") or record.get("completion") or record.get("answer")
+    if assistant is not None: messages.append({"role": "assistant", "content": str(assistant)})
+    if not messages and record.get("text"):
+        messages.append({"role": "user", "content": str(record["text"])})
     return {"messages": messages}
 
 def format_instruct(record: Dict[str, Any]) -> Dict[str, Any]:
     return {
-        "instruction": str(record.get("instruction", "")),
-        "input": str(record.get("input", "")),
-        "output": str(record.get("output", ""))
+        "instruction": str(record.get("instruction") or record.get("prompt") or record.get("question") or ""),
+        "input": str(record.get("input") or ""),
+        "output": str(record.get("output") or record.get("response") or record.get("completion") or record.get("answer") or "")
     }
 
 def get_record_hash(record: Dict[str, Any], dedup_fields: Optional[List[str]] = None, normalize: bool = False) -> str:
@@ -135,5 +150,6 @@ def get_record_hash(record: Dict[str, Any], dedup_fields: Optional[List[str]] = 
             if isinstance(v, list): return [_norm(i) for i in v]
             return v
         target = _norm(target)
-    serialized = json.dumps(target, sort_keys=True, ensure_ascii=False, separators=(',', ':'))
+    serialized = json.dumps(target, sort_keys=True, ensure_ascii=False,
+                            separators=(',', ':'), default=str)
     return hashlib.sha256(serialized.encode('utf-8')).hexdigest()

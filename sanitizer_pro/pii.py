@@ -29,15 +29,18 @@ def strip_html(html: str) -> str:
     except Exception:
         return html
 
+# Order matters: URLs/emails first (so their fragments aren't re-matched), then
+# longer numeric patterns (card) before shorter ones (SSN, phone) that could
+# otherwise consume a prefix of them.
 _PII_PATTERNS: List[Tuple[re.Pattern[str], str, str]] = [
     (re.compile(r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b', re.IGNORECASE), '[PII_EMAIL]', 'email'),
     (re.compile(r'https?://\S+', re.IGNORECASE), '[PII_URL]', 'url'),
-    (re.compile(r'www\.\S+', re.IGNORECASE), '[PII_URL]', 'url'),
+    (re.compile(r'\bwww\.\S+', re.IGNORECASE), '[PII_URL]', 'url'),
+    (re.compile(r'\b(?:\d{4}[ \-]?){3}\d{4}\b'), '[PII_CARD]', 'card'),
+    (re.compile(r'\b\d{3}-\d{2}-\d{4}\b'), '[PII_SSN]', 'ssn'),
     (re.compile(r'\b\d{3}[-.\s]?\d{3}[-.\s]?\d{4}\b'), '[PII_PHONE]', 'phone'),
     (re.compile(r'\+\d{1,3}[\s\-]?\(?\d{1,4}\)?[\s\-]?\d{1,4}[\s\-]?\d{1,9}\b'), '[PII_PHONE]', 'phone'),
-    (re.compile(r'\b(?:\d{4}[ \-]?){3}\d{4}\b'), '[PII_CARD]', 'card'),
     (re.compile(r'\b(?:(?:25[0-5]|2[0-4]\d|1\d{2}|[1-9]\d|\d)\.){3}(?:25[0-5]|2[0-4]\d|1\d{2}|[1-9]\d|\d)\b'), '[PII_IP]', 'ip'),
-    (re.compile(r'\b\d{3}-\d{2}-\d{4}\b'), '[PII_SSN]', 'ssn'),
 ]
 
 def _mask_email(m: re.Match[str]) -> str:
@@ -85,6 +88,7 @@ class PseudoRegistry:
         'email': 'email_{n:04d}@redacted.local', 'phone': 'phone_{n:04d}',
         'card': 'card_{n:04d}', 'ip': '0.0.0.{n}', 'ssn': '000-00-{n:04d}',
         'url': 'https://redacted-{n:04d}.local', 'custom': 'pii_{n:04d}',
+        'person': 'Person_{n:04d}', 'location': 'Place_{n:04d}', 'org': 'Org_{n:04d}',
     }
 
     def __init__(self) -> None:
@@ -123,12 +127,19 @@ def redact_pii(
     return text
 
 def clean_text(text: str, remove_html: bool = True) -> str:
-    """Normalize unicode, strip HTML, and collapse whitespace."""
+    """Normalize unicode, strip HTML, and tidy whitespace.
+
+    Newlines are preserved (they carry structure in code/markdown training
+    data); only control characters, horizontal whitespace runs, and excessive
+    blank lines are collapsed.
+    """
     if not isinstance(text, str):
         return text
     text = unicodedata.normalize('NFKC', text)
     if remove_html:
         text = strip_html(text)
-    text = re.sub(r'[\x00-\x1F\x7F-\x9F]', ' ', text)
-    text = re.sub(r'\s+', ' ', text).strip()
-    return text
+    text = re.sub(r'[\x00-\x08\x0B-\x1F\x7F-\x9F]', ' ', text)  # keep \t (0x09) and \n (0x0A)
+    text = re.sub(r'[ \t]+', ' ', text)
+    text = re.sub(r' ?\n ?', '\n', text)
+    text = re.sub(r'\n{3,}', '\n\n', text)
+    return text.strip()

@@ -34,6 +34,9 @@ all = [
     "datasketch>=1.6.0",
     "transformers>=4.30.0",
 ]
+ner = [
+    "spacy>=3.5.0",
+]
 dev = [
     "ruff>=0.1.0",
     "mypy>=1.5.0",
@@ -41,14 +44,21 @@ dev = [
 ]
 
 [project.scripts]
-sanitize = "sanitize_pro.cli:main"
+sanitize = "sanitizer_pro.cli:main"
 
 [tool.setuptools.packages.find]
-include = ["sanitize_pro*"]
+include = ["sanitizer_pro*"]
 
 [tool.ruff]
 line-length = 100
 target-version = "py39"
+
+[tool.ruff.lint]
+# E701/E702: the codebase deliberately uses compact `if cond: stmt` one-liners.
+ignore = ["E701", "E702"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
 
 [tool.mypy]
 python_version = "3.9"

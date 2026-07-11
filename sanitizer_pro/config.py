@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Set, Tuple
 import re
 
-from sanitize_pro.utils import ConfigurationError
+from sanitizer_pro.utils import ConfigurationError
 
 try:
     import yaml
@@ -51,13 +51,29 @@ def load_quality_script(path: str) -> Callable[[Dict[str, Any]], bool]:
 def load_custom_pii_patterns(path: str) -> List[Tuple[re.Pattern[str], str, str]]:
     entries = json.loads(Path(path).read_text(encoding='utf-8'))
     if not isinstance(entries, list): raise ConfigurationError(f"Custom PII file must be JSON array: {path}")
-    return [(re.compile(e['pattern'], re.IGNORECASE), e['token'], 'custom') for e in entries]
+    patterns = []
+    for i, e in enumerate(entries):
+        if not isinstance(e, dict) or 'pattern' not in e or 'token' not in e:
+            raise ConfigurationError(f"PII entry #{i} must be an object with 'pattern' and 'token': {path}")
+        try:
+            compiled = re.compile(e['pattern'], re.IGNORECASE)
+        except re.error as exc:
+            raise ConfigurationError(f"Invalid regex in PII entry #{i} ({e['pattern']!r}): {exc}") from None
+        patterns.append((compiled, e['token'], e.get('kind', 'custom')))
+    return patterns
 
 def load_field_config(path: str) -> List[Dict[str, Any]]:
     config = json.loads(Path(path).read_text(encoding='utf-8'))
+    if not isinstance(config, list):
+        raise ConfigurationError(f"Field config must be a JSON array: {path}")
     valid = {'rename', 'drop', 'pii_only', 'no_clean'}
     for i, e in enumerate(config):
-        if e['action'] not in valid: raise ConfigurationError(f"Invalid action: {e['action']}")
+        if not isinstance(e, dict) or 'field' not in e or 'action' not in e:
+            raise ConfigurationError(f"Field config entry #{i} must have 'field' and 'action'.")
+        if e['action'] not in valid:
+            raise ConfigurationError(f"Invalid action in entry #{i}: {e['action']} (valid: {sorted(valid)})")
+        if e['action'] == 'rename' and 'to' not in e:
+            raise ConfigurationError(f"Rename entry #{i} for '{e['field']}' is missing 'to'.")
     return config
 
 def build_field_ops(config: List[Dict[str, Any]]) -> Tuple[Dict[str, str], Set[str], Set[str], Set[str]]:
