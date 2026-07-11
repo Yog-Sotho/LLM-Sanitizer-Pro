@@ -105,6 +105,36 @@ format and no extra dependencies.
 
 Run `sanitize --help` for the full option reference, or `sanitize --generate-config yaml` to print a config template usable with `--config`.
 
+## 🐍 Python API
+
+The CLI is a thin layer over a first-class library — services should embed it
+directly instead of shelling out:
+
+```python
+from sanitizer_pro import Sanitizer, SanitizerConfig
+
+config = SanitizerConfig(
+    remove_pii=True, deduplicate=True,
+    quality_min_score=0.5, quality_score_field="_q",
+    decontaminate=["gsm8k", "mmlu"], validate_chat=False,
+)
+
+with Sanitizer(config) as s:
+    clean = list(s.process(records))     # iterable of dicts in → clean dicts out
+    report = s.stats.to_dict()           # same schema as --stats-file
+
+    # Or inspect records one at a time (audit-UI building block):
+    result = s.process_record({"text": "..."})
+    result.kept        # bool
+    result.reason      # 'quality' | 'duplicate' | 'contaminated' | 'chat:<detail>' | ...
+    result.score       # quality score in [0, 1] when scoring is enabled
+```
+
+`SanitizerConfig` mirrors the CLI flags with the same names and defaults.
+Dedup and pseudonym state persist across calls on one `Sanitizer` instance;
+`keep_top_percent` applies in `process()` (it needs the whole stream). Export
+pseudonym mappings with `s.export_pseudonym_map(path)`.
+
 ## 🧪 Development
 
 ```bash
