@@ -220,3 +220,64 @@ def test_chat_max_tokens(tmp_path):
                 '--min-chars', '10', '--min-words', '3', '--no-progress', '--quiet')
     assert r.returncode == 0, r.stderr
     assert len(out.read_text().splitlines()) == 1
+
+
+GOOD = "The committee reviewed the proposal in detail and concluded that the plan was feasible for the coming year."
+BAD = "buy now click here buy now click here buy now click here buy now click here buy now"
+
+
+def test_quality_min_score(tmp_path):
+    inp, out = tmp_path / "in.jsonl", tmp_path / "out.jsonl"
+    stats = tmp_path / "stats.json"
+    write_jsonl(inp, [{"text": GOOD}, {"text": BAD}])
+    r = run_cli('--input', str(inp), '--output', str(out),
+                '--quality-min-score', '0.6', '--min-chars', '20', '--min-words', '5',
+                '--min-unique-ratio', '0', '--stats-file', str(stats),
+                '--no-progress', '--quiet')
+    assert r.returncode == 0, r.stderr
+    lines = out.read_text().splitlines()
+    assert len(lines) == 1 and 'committee' in lines[0]
+    data = json.loads(stats.read_text())
+    assert data['filtered_low_score'] == 1
+    assert data['quality_score_mean'] is not None
+
+
+def test_quality_score_field_annotation(tmp_path):
+    inp, out = tmp_path / "in.jsonl", tmp_path / "out.jsonl"
+    write_jsonl(inp, [{"text": GOOD}])
+    r = run_cli('--input', str(inp), '--output', str(out),
+                '--quality-score-field', '_score', '--min-chars', '20', '--min-words', '5',
+                '--no-progress', '--quiet')
+    assert r.returncode == 0, r.stderr
+    rec = json.loads(out.read_text().splitlines()[0])
+    assert 0.0 <= rec['_score'] <= 1.0
+
+
+def test_keep_top_percent_preserves_order(tmp_path):
+    inp, out = tmp_path / "in.jsonl", tmp_path / "out.jsonl"
+    # interleave good prose and junk; top 50% should be the prose, in input order
+    records = []
+    for i in range(4):
+        records.append({"id": i * 2, "text": GOOD + f" Extra sentence number {i} here."})
+        records.append({"id": i * 2 + 1, "text": BAD + f" spam {i}"})
+    write_jsonl(inp, records)
+    r = run_cli('--input', str(inp), '--output', str(out),
+                '--keep-top-percent', '50', '--min-chars', '20', '--min-words', '5',
+                '--min-unique-ratio', '0', '--no-progress', '--quiet')
+    assert r.returncode == 0, r.stderr
+    kept = [json.loads(line) for line in out.read_text().splitlines()]
+    assert len(kept) == 4
+    ids = [rec['id'] for rec in kept]
+    assert ids == sorted(ids), "output must preserve input order"
+    assert all(rec['id'] % 2 == 0 for rec in kept), "only the prose records should survive"
+
+
+def test_invalid_score_flags(tmp_path):
+    inp = tmp_path / "in.jsonl"
+    write_jsonl(inp, SAMPLE)
+    r = run_cli('--input', str(inp), '--output', str(tmp_path / 'o.jsonl'),
+                '--quality-min-score', '1.5')
+    assert r.returncode == 1
+    r = run_cli('--input', str(inp), '--output', str(tmp_path / 'o.jsonl'),
+                '--keep-top-percent', '0')
+    assert r.returncode == 1

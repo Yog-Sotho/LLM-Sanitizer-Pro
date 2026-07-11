@@ -13,6 +13,7 @@ Production-grade, modular dataset sanitization, PII redaction, and curation pipe
 - **LLM-Native Formatting**: Direct export to ChatML (`--format-chatml`) and Alpaca/Instruct (`--format-instruct`) schemas, with automatic key mapping (`prompt`/`question`/`response`/`completion`/…).
 - **Chat Dataset Validation** (`--validate-chat`): lint `messages`-format records before they reach a trainer — role alternation, empty turns, missing assistant replies, multiple/misplaced system messages, unknown roles, and per-conversation token budgets (`--chat-max-tokens`), with a per-reason rejection breakdown in the report and stats file.
 - **Quality & Content Filtering**: Length/word/uniqueness/ASCII gates, all-caps rejection, code detection, profanity filtering, language filtering with confidence gating, and pluggable Python quality scripts.
+- **Quality Scoring** (`--quality-min-score`, `--keep-top-percent`, `--quality-score-field`): every record gets a [0, 1] quality score — a dependency-free heuristic (C4/Gopher-style prose signals with a multiplicative repetition penalty) or causal-LM perplexity (`--quality-scorer perplexity`). Filter by absolute bar, keep only the best P%, or just annotate records for downstream sorting; score histogram and mean land in the stats file.
 - **Benchmark Decontamination**: n-gram overlap removal against eval test sets (`--decontaminate mmlu,gsm8k,humaneval,arc,hellaswag,truthfulqa,winogrande,mbpp`) — benchmarks are auto-downloaded from the Hugging Face Hub and cached, or supply your own reference files with `--decontam-refs`.
 - **Dataset Splitting & Sharding**: `--split train=0.9,val=0.05,test=0.05` or fixed-size shards with `--shard-size`.
 - **Crash-Safe I/O**: Atomic JSON writes (`.tmp` + `os.replace()`), safe HTML stripping via `html.parser`, structure-preserving text normalization (newlines kept for code/markdown data).
@@ -68,6 +69,17 @@ sanitize --input chat.jsonl --output fit.jsonl --validate-chat --chat-max-tokens
 # Multi-agent / tool traces: keep structural checks, relax ordering rules
 sanitize --input traces.jsonl --output clean.jsonl --validate-chat --chat-lenient \
     --chat-roles system,user,assistant,tool
+
+# Quality scoring: drop junk below an absolute bar, or keep only the best 30%
+sanitize --input data.jsonl --output clean.jsonl --quality-min-score 0.5
+sanitize --input data.jsonl --output best.jsonl --keep-top-percent 30
+
+# Annotate records with their score instead of filtering (sort downstream)
+sanitize --input data.jsonl --output scored.jsonl --quality-score-field quality
+
+# Perplexity-based scoring with a causal LM (pip install transformers torch)
+sanitize --input data.jsonl --output clean.jsonl --quality-scorer perplexity \
+    --quality-model distilgpt2 --quality-min-score 0.4
 ```
 
 ### NER-backed PII install

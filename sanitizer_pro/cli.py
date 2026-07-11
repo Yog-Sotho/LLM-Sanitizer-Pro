@@ -7,7 +7,7 @@ import os
 import random
 import sys
 from pathlib import Path
-from typing import Any, Dict, Iterator, List, Optional
+from typing import Any, Dict, Iterator, List, Optional, Tuple
 
 try:
     from tqdm import tqdm as _tqdm
@@ -88,6 +88,10 @@ class RunStats:
         self.filtered_contaminated = 0
         self.filtered_chat = 0
         self.chat_invalid_reasons: Dict[str, int] = {}
+        self.filtered_low_score = 0
+        self.score_hist: Dict[int, int] = {}
+        self.score_sum = 0.0
+        self.score_count = 0
         self.deduplicated = 0
         self.malformed = 0
         self.sampled_out = 0
@@ -106,6 +110,12 @@ class RunStats:
         if lang:
             self.lang_dist[lang] = self.lang_dist.get(lang, 0) + 1
 
+    def record_score(self, score: float) -> None:
+        bucket = min(9, int(score * 10))
+        self.score_hist[bucket] = self.score_hist.get(bucket, 0) + 1
+        self.score_sum += score
+        self.score_count += 1
+
     def to_dict(self) -> Dict[str, Any]:
         total = self.total or 1
         return {
@@ -121,6 +131,11 @@ class RunStats:
             'filtered_chat_invalid': self.filtered_chat,
             'chat_invalid_reasons': dict(sorted(self.chat_invalid_reasons.items(),
                                                 key=lambda x: -x[1])),
+            'filtered_low_score': self.filtered_low_score,
+            'quality_score_mean': (round(self.score_sum / self.score_count, 4)
+                                   if self.score_count else None),
+            'quality_score_histogram': {f"{b / 10:.1f}": self.score_hist[b]
+                                        for b in sorted(self.score_hist)},
             'deduplicated': self.deduplicated,
             'malformed': self.malformed,
             'sampled_out': self.sampled_out,
@@ -209,6 +224,18 @@ def build_parser() -> argparse.ArgumentParser:
     qg.add_argument('--lang-confidence', type=float, default=0.0)
     qg.add_argument('--reject-code', action='store_true', help='Reject records detected as code snippets.')
     qg.add_argument('--reject-profanity', action='store_true', help='Reject records containing profanity.')
+    qg.add_argument('--quality-scorer', default='heuristic', choices=['heuristic', 'perplexity'],
+                    help='Scoring backend for --quality-min-score / --keep-top-percent / '
+                         '--quality-score-field (default: heuristic, no dependencies).')
+    qg.add_argument('--quality-model', default=None, metavar='NAME',
+                    help='Causal LM for the perplexity scorer (default: distilgpt2).')
+    qg.add_argument('--quality-min-score', type=float, default=None, metavar='X',
+                    help='Reject records with quality score < X (scores are in [0, 1]).')
+    qg.add_argument('--keep-top-percent', type=float, default=None, metavar='P',
+                    help='Keep only the best P%% of surviving records by quality score. '
+                         'Buffers survivors in memory; output order is preserved.')
+    qg.add_argument('--quality-score-field', default=None, metavar='FIELD',
+                    help='Annotate each output record with its quality score in FIELD.')
 
     # Features
     fg = parser.add_argument_group('Features')
@@ -394,6 +421,10 @@ def main() -> None:
         logging.error("--shard-size must be >= 1."); sys.exit(1)
     if not (0 < args.fuzzy_threshold <= 1):
         logging.error("--fuzzy-threshold must be in (0, 1]."); sys.exit(1)
+    if args.quality_min_score is not None and not (0 <= args.quality_min_score <= 1):
+        logging.error("--quality-min-score must be in [0, 1]."); sys.exit(1)
+    if args.keep_top_percent is not None and not (0 < args.keep_top_percent <= 100):
+        logging.error("--keep-top-percent must be in (0, 100]."); sys.exit(1)
     if lang_filter_set:
         from sanitizer_pro.quality import LANGDETECT_AVAILABLE
         if not LANGDETECT_AVAILABLE:
@@ -457,6 +488,19 @@ def main() -> None:
         except (ConfigurationError, ImportError) as exc:
             logging.error(str(exc)); sys.exit(1)
 
+    quality_scorer = None
+    if (args.quality_min_score is not None or args.keep_top_percent is not None
+            or args.quality_score_field):
+        from sanitizer_pro.scoring import make_scorer
+        try:
+            quality_scorer = make_scorer(args.quality_scorer, model=args.quality_model)
+        except (ConfigurationError, ImportError) as exc:
+            logging.error(str(exc)); sys.exit(1)
+        logging.info(f"Quality scorer ready: {quality_scorer.backend_name}")
+        if args.keep_top_percent is not None:
+            logging.info(f"--keep-top-percent {args.keep_top_percent}: surviving records "
+                         "are buffered in memory until end of input.")
+
     chat_validator = None
     if args.validate_chat:
         from sanitizer_pro.chat import ChatValidator, make_token_counter
@@ -507,6 +551,10 @@ def main() -> None:
 
     use_progress = TQDM_AVAILABLE and not args.no_progress and not args.quiet and args.input != _STDIN
 
+    # (score, sanitized, quality_text, lang) survivors awaiting top-P% selection
+    topk_buffer: Optional[List[Tuple[Optional[float], Dict[str, Any], str, Optional[str]]]] = \
+        [] if args.keep_top_percent is not None else None
+
     def _handle(sanitized: Optional[Dict[str, Any]], reason: Optional[FilterReason], quality_text: str, lang: Optional[str], writer: Any) -> None:
         if sanitized is None:
             if reason == FilterReason.LANGUAGE: run_stats.filtered_lang += 1
@@ -529,6 +577,13 @@ def main() -> None:
             run_stats.filtered_contaminated += 1
             return
 
+        score: Optional[float] = None
+        if quality_scorer is not None:
+            score = quality_scorer.score(quality_text)
+            if args.quality_min_score is not None and score < args.quality_min_score:
+                run_stats.filtered_low_score += 1
+                return
+
         if args.sample is not None and random.random() >= args.sample:
             run_stats.sampled_out += 1
             return
@@ -546,9 +601,36 @@ def main() -> None:
                     return
                 deduper.add(h)
 
+        if topk_buffer is not None:
+            topk_buffer.append((score, sanitized, quality_text, lang))
+            return
+        _emit(score, sanitized, quality_text, lang, writer)
+
+    def _emit(score: Optional[float], sanitized: Dict[str, Any], quality_text: str,
+              lang: Optional[str], writer: Any) -> None:
+        if score is not None:
+            run_stats.record_score(score)
+            if args.quality_score_field:
+                sanitized[args.quality_score_field] = score
         run_stats.record_kept(quality_text, lang=lang)
         if writer is not None:
             writer.write(sanitized)
+
+    def _finalize(writer: Any) -> None:
+        """Drain the --keep-top-percent buffer: emit the best P% in input order."""
+        if topk_buffer is None:
+            return
+        if not topk_buffer:
+            return
+        n_keep = max(1, round(len(topk_buffer) * args.keep_top_percent / 100))
+        ranked = sorted(range(len(topk_buffer)),
+                        key=lambda i: topk_buffer[i][0], reverse=True)
+        keep_idx = set(ranked[:n_keep])
+        run_stats.filtered_low_score += len(topk_buffer) - n_keep
+        for i, (score, sanitized, quality_text, lang) in enumerate(topk_buffer):
+            if i in keep_idx:
+                _emit(score, sanitized, quality_text, lang, writer)
+        topk_buffer.clear()
 
     def _process(writer: Any) -> None:
         if args.jobs > 1:
@@ -608,19 +690,23 @@ def main() -> None:
             )
             _handle(sanitized, reason, quality_text, lang, writer)
 
+    def _run(writer: Any) -> None:
+        _process(writer=writer)
+        _finalize(writer)
+
     writer_ctx: Any = None
     try:
         if no_output:
-            _process(writer=None)
+            _run(writer=None)
         elif split_spec:
             writer_ctx = SplitWriter(args.output, output_fmt, args.encoding, split_spec, txt_fallback_field=args.txt_fallback_field)
-            with writer_ctx as writer: _process(writer=writer)
+            with writer_ctx as writer: _run(writer=writer)
         elif args.shard_size:
             writer_ctx = ShardedWriter(args.output, output_fmt, args.encoding, args.shard_size, txt_fallback_field=args.txt_fallback_field)
-            with writer_ctx as writer: _process(writer=writer)
+            with writer_ctx as writer: _run(writer=writer)
         else:
             writer_ctx = StreamingWriter(args.output, output_fmt, args.encoding, txt_fallback_field=args.txt_fallback_field)
-            with writer_ctx as writer: _process(writer=writer)
+            with writer_ctx as writer: _run(writer=writer)
     except KeyboardInterrupt:
         logging.warning("Interrupted — flushing output …")
         if writer_ctx is not None and hasattr(writer_ctx, 'flush'): writer_ctx.flush()
@@ -654,6 +740,7 @@ def main() -> None:
         f"Filtered (profanity)    : {run_stats.filtered_profanity:,}",
         f"Filtered (contaminated) : {run_stats.filtered_contaminated:,}",
         f"Filtered (chat-invalid) : {run_stats.filtered_chat:,}",
+        f"Filtered (low score)    : {run_stats.filtered_low_score:,}",
         f"Deduplicated            : {run_stats.deduplicated:,}",
         f"Malformed               : {run_stats.malformed:,}",
         f"Sampled out             : {run_stats.sampled_out:,}",
