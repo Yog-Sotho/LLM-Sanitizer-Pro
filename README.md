@@ -112,7 +112,11 @@ pip install -e .[dev]
 pytest            # run the test suite
 ruff check sanitizer_pro tests
 ```
-
+---
 ## License
 
 MIT
+
+## Author
+
+Yogsotho
