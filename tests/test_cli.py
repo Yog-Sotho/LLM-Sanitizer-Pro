@@ -168,3 +168,55 @@ def test_pii_ner_end_to_end(tmp_path):
     rec = json.loads(out.read_text().splitlines()[0])
     assert '[PII_PERSON]' in rec['text']
     assert 'Sarah Connor' not in rec['text'] and 'John Smith' not in rec['text']
+
+
+def test_validate_chat_end_to_end(tmp_path):
+    inp, out = tmp_path / "in.jsonl", tmp_path / "out.jsonl"
+    stats = tmp_path / "stats.json"
+    write_jsonl(inp, [
+        {"messages": [{"role": "user", "content": "What is the capital of France today?"},
+                      {"role": "assistant", "content": "The capital of France is Paris."}]},
+        {"messages": [{"role": "user", "content": "A question that never got any answer here."}]},
+        {"messages": [{"role": "assistant", "content": "An unprompted reply with enough words."},
+                      {"role": "user", "content": "Strange ordering of the turns here."},
+                      {"role": "assistant", "content": "Indeed it is quite strange."}]},
+    ])
+    r = run_cli('--input', str(inp), '--output', str(out),
+                '--validate-chat', '--min-chars', '10', '--min-words', '3',
+                '--stats-file', str(stats), '--no-progress', '--quiet')
+    assert r.returncode == 0, r.stderr
+    lines = out.read_text().splitlines()
+    assert len(lines) == 1 and 'Paris' in lines[0]
+    data = json.loads(stats.read_text())
+    assert data['filtered_chat_invalid'] == 2
+    assert data['chat_invalid_reasons'] == {'no_assistant_reply': 1, 'first_not_user': 1}
+
+
+def test_format_chatml_then_validate(tmp_path):
+    inp, out = tmp_path / "in.jsonl", tmp_path / "out.jsonl"
+    write_jsonl(inp, [
+        {"instruction": "Summarize the meeting notes in two sentences please.",
+         "output": "The team agreed to ship the release next Tuesday after final QA."},
+        {"instruction": "A prompt with no output field at all, which cannot train."},
+    ])
+    r = run_cli('--input', str(inp), '--output', str(out),
+                '--format-chatml', '--validate-chat',
+                '--min-chars', '10', '--min-words', '3', '--no-progress', '--quiet')
+    assert r.returncode == 0, r.stderr
+    lines = out.read_text().splitlines()
+    assert len(lines) == 1 and 'Tuesday' in lines[0]
+
+
+def test_chat_max_tokens(tmp_path):
+    inp, out = tmp_path / "in.jsonl", tmp_path / "out.jsonl"
+    write_jsonl(inp, [
+        {"messages": [{"role": "user", "content": "short question about the weather"},
+                      {"role": "assistant", "content": "short answer it is sunny"}]},
+        {"messages": [{"role": "user", "content": "long " * 200},
+                      {"role": "assistant", "content": "very long answer " + "word " * 300}]},
+    ])
+    r = run_cli('--input', str(inp), '--output', str(out),
+                '--validate-chat', '--chat-max-tokens', '50',
+                '--min-chars', '10', '--min-words', '3', '--no-progress', '--quiet')
+    assert r.returncode == 0, r.stderr
+    assert len(out.read_text().splitlines()) == 1

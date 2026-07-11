@@ -86,6 +86,8 @@ class RunStats:
         self.filtered_code = 0
         self.filtered_profanity = 0
         self.filtered_contaminated = 0
+        self.filtered_chat = 0
+        self.chat_invalid_reasons: Dict[str, int] = {}
         self.deduplicated = 0
         self.malformed = 0
         self.sampled_out = 0
@@ -116,6 +118,9 @@ class RunStats:
             'filtered_code': self.filtered_code,
             'filtered_profanity': self.filtered_profanity,
             'filtered_contaminated': self.filtered_contaminated,
+            'filtered_chat_invalid': self.filtered_chat,
+            'chat_invalid_reasons': dict(sorted(self.chat_invalid_reasons.items(),
+                                                key=lambda x: -x[1])),
             'deduplicated': self.deduplicated,
             'malformed': self.malformed,
             'sampled_out': self.sampled_out,
@@ -256,6 +261,21 @@ def build_parser() -> argparse.ArgumentParser:
                     help='Minimum colliding n-grams to flag a record (default 1).')
     dg.add_argument('--decontam-cache', default=None, metavar='DIR',
                     help='Benchmark download cache dir (default ~/.cache/llm-sanitizer-pro/benchmarks).')
+
+    # Chat validation
+    cg = parser.add_argument_group('Chat Dataset Validation')
+    cg.add_argument('--validate-chat', action='store_true',
+                    help='Reject records whose "messages" structure is invalid for chat '
+                         'fine-tuning (role alternation, empty turns, no assistant reply, …). '
+                         'Combine with --format-chatml to convert first, then validate.')
+    cg.add_argument('--chat-lenient', action='store_true',
+                    help='Only structural checks (schema, known roles, non-empty content, '
+                         'assistant present); skip ordering/alternation rules.')
+    cg.add_argument('--chat-max-tokens', type=int, default=None, metavar='N',
+                    help='Reject conversations whose total content exceeds N tokens '
+                         '(counted with --tokenizer).')
+    cg.add_argument('--chat-roles', default='system,user,assistant', metavar='ROLES',
+                    help='Comma-separated allowed roles (default: system,user,assistant).')
 
     # CSV / Excel
     iog = parser.add_argument_group('CSV / Excel Options')
@@ -437,6 +457,19 @@ def main() -> None:
         except (ConfigurationError, ImportError) as exc:
             logging.error(str(exc)); sys.exit(1)
 
+    chat_validator = None
+    if args.validate_chat:
+        from sanitizer_pro.chat import ChatValidator, make_token_counter
+        if args.chat_max_tokens is not None and args.chat_max_tokens < 1:
+            logging.error("--chat-max-tokens must be >= 1."); sys.exit(1)
+        chat_validator = ChatValidator(
+            allowed_roles=str(args.chat_roles).split(','), lenient=args.chat_lenient,
+            max_tokens=args.chat_max_tokens,
+            token_counter=make_token_counter(args.tokenizer) if args.chat_max_tokens else None,
+        )
+        if not chat_validator.allowed_roles:
+            logging.error("--chat-roles must name at least one role."); sys.exit(1)
+
     contamination_index = None
     if args.decontaminate or args.decontam_refs:
         from sanitizer_pro.decontam import build_index, resolve_benchmark_names
@@ -482,6 +515,15 @@ def main() -> None:
             elif reason == FilterReason.PROFANITY: run_stats.filtered_profanity += 1
             else: run_stats.filtered_quality += 1
             return
+
+        if chat_validator is not None:
+            chat_reason = chat_validator.check(sanitized)
+            if chat_reason:
+                run_stats.filtered_chat += 1
+                run_stats.chat_invalid_reasons[chat_reason] = \
+                    run_stats.chat_invalid_reasons.get(chat_reason, 0) + 1
+                logging.debug(f"Chat validation rejected record: {chat_reason}")
+                return
 
         if contamination_index is not None and contamination_index.is_contaminated(quality_text):
             run_stats.filtered_contaminated += 1
@@ -611,11 +653,16 @@ def main() -> None:
         f"Filtered (code)         : {run_stats.filtered_code:,}",
         f"Filtered (profanity)    : {run_stats.filtered_profanity:,}",
         f"Filtered (contaminated) : {run_stats.filtered_contaminated:,}",
+        f"Filtered (chat-invalid) : {run_stats.filtered_chat:,}",
         f"Deduplicated            : {run_stats.deduplicated:,}",
         f"Malformed               : {run_stats.malformed:,}",
         f"Sampled out             : {run_stats.sampled_out:,}",
         sep
     ]
+    if run_stats.chat_invalid_reasons:
+        top = ', '.join(f"{k}={v}" for k, v in sorted(
+            run_stats.chat_invalid_reasons.items(), key=lambda x: -x[1])[:5])
+        lines.insert(-1, f"  chat-invalid breakdown: {top}")
     print('\n'.join(lines), file=sys.stderr)
 
     if args.stats_file:

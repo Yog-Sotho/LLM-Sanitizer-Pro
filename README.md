@@ -11,6 +11,7 @@ Production-grade, modular dataset sanitization, PII redaction, and curation pipe
   - Exact SHA-256 dedup (in-memory or disk-backed SQLite for huge datasets).
   - Fuzzy near-dedup via MinHash + LSH (`--fuzzy-dedup`, tunable `--fuzzy-threshold`).
 - **LLM-Native Formatting**: Direct export to ChatML (`--format-chatml`) and Alpaca/Instruct (`--format-instruct`) schemas, with automatic key mapping (`prompt`/`question`/`response`/`completion`/…).
+- **Chat Dataset Validation** (`--validate-chat`): lint `messages`-format records before they reach a trainer — role alternation, empty turns, missing assistant replies, multiple/misplaced system messages, unknown roles, and per-conversation token budgets (`--chat-max-tokens`), with a per-reason rejection breakdown in the report and stats file.
 - **Quality & Content Filtering**: Length/word/uniqueness/ASCII gates, all-caps rejection, code detection, profanity filtering, language filtering with confidence gating, and pluggable Python quality scripts.
 - **Benchmark Decontamination**: n-gram overlap removal against eval test sets (`--decontaminate mmlu,gsm8k,humaneval,arc,hellaswag,truthfulqa,winogrande,mbpp`) — benchmarks are auto-downloaded from the Hugging Face Hub and cached, or supply your own reference files with `--decontam-refs`.
 - **Dataset Splitting & Sharding**: `--split train=0.9,val=0.05,test=0.05` or fixed-size shards with `--shard-size`.
@@ -57,6 +58,16 @@ sanitize --input data.jsonl --output clean.jsonl --remove-pii --pii-ner
 # Pseudonymize everything consistently (names, emails, …) and keep the mapping
 sanitize --input data.jsonl --output clean.jsonl --remove-pii --pii-ner \
     --pii-pseudonymize --pseudo-map-file mapping.json
+
+# Convert instruction data to ChatML, then reject structurally invalid conversations
+sanitize --input data.jsonl --output chat.jsonl --format-chatml --validate-chat
+
+# Enforce a context-window budget per conversation (tokens counted with --tokenizer)
+sanitize --input chat.jsonl --output fit.jsonl --validate-chat --chat-max-tokens 4096
+
+# Multi-agent / tool traces: keep structural checks, relax ordering rules
+sanitize --input traces.jsonl --output clean.jsonl --validate-chat --chat-lenient \
+    --chat-roles system,user,assistant,tool
 ```
 
 ### NER-backed PII install
