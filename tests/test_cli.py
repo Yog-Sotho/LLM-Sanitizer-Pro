@@ -107,3 +107,39 @@ def test_chatml_output(tmp_path):
     assert r.returncode == 0, r.stderr
     rec = json.loads(out.read_text().splitlines()[0])
     assert [m['role'] for m in rec['messages']] == ['user', 'assistant']
+
+
+def test_decontaminate_list():
+    r = run_cli('--decontaminate', 'list')
+    assert r.returncode == 0
+    assert 'mmlu' in r.stdout and 'gsm8k' in r.stdout
+
+
+def test_decontaminate_with_local_refs(tmp_path):
+    bench_q = ("Natalia sold clips to 48 of her friends in April, and then she sold "
+               "half as many clips in May. How many clips did Natalia sell altogether?")
+    refs = tmp_path / "refs.txt"
+    refs.write_text(bench_q + "\n")
+    inp, out = tmp_path / "in.jsonl", tmp_path / "out.jsonl"
+    stats = tmp_path / "stats.json"
+    write_jsonl(inp, [
+        {"text": f"Question: {bench_q} Answer: 72"},  # contaminated
+        {"text": "A clean training example about photosynthesis with plenty of words to pass filters."},
+    ])
+    r = run_cli('--input', str(inp), '--output', str(out),
+                '--decontam-refs', str(refs), '--min-chars', '20', '--min-words', '5',
+                '--stats-file', str(stats), '--no-progress', '--quiet')
+    assert r.returncode == 0, r.stderr
+    lines = out.read_text().splitlines()
+    assert len(lines) == 1 and 'photosynthesis' in lines[0]
+    data = json.loads(stats.read_text())
+    assert data['filtered_contaminated'] == 1
+
+
+def test_decontaminate_unknown_benchmark(tmp_path):
+    inp = tmp_path / "in.jsonl"
+    write_jsonl(inp, SAMPLE)
+    r = run_cli('--input', str(inp), '--output', str(tmp_path / 'o.jsonl'),
+                '--decontaminate', 'nosuchbench')
+    assert r.returncode == 1
+    assert 'Unknown benchmark' in r.stderr

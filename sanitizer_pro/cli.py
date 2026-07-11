@@ -85,6 +85,7 @@ class RunStats:
         self.filtered_require = 0
         self.filtered_code = 0
         self.filtered_profanity = 0
+        self.filtered_contaminated = 0
         self.deduplicated = 0
         self.malformed = 0
         self.sampled_out = 0
@@ -114,6 +115,7 @@ class RunStats:
             'filtered_require': self.filtered_require,
             'filtered_code': self.filtered_code,
             'filtered_profanity': self.filtered_profanity,
+            'filtered_contaminated': self.filtered_contaminated,
             'deduplicated': self.deduplicated,
             'malformed': self.malformed,
             'sampled_out': self.sampled_out,
@@ -231,6 +233,22 @@ def build_parser() -> argparse.ArgumentParser:
     fg.add_argument('--format-chatml', action='store_true', help='Format output as ChatML messages.')
     fg.add_argument('--format-instruct', action='store_true', help='Format output as Alpaca/Instruct schema.')
 
+    # Decontamination
+    dg = parser.add_argument_group('Benchmark Decontamination')
+    dg.add_argument('--decontaminate', default=None, metavar='NAMES',
+                    help="Comma-separated benchmark names to decontaminate against "
+                         "(e.g. mmlu,gsm8k), 'all', or 'list' to show available benchmarks. "
+                         "Test sets are downloaded from the Hugging Face Hub and cached.")
+    dg.add_argument('--decontam-refs', default=None, metavar='PATHS',
+                    help='Comma-separated local reference files (any supported input format) '
+                         'whose text is treated as benchmark material.')
+    dg.add_argument('--decontam-ngram', type=int, default=8, metavar='N',
+                    help='Word n-gram size for overlap detection (default 8).')
+    dg.add_argument('--decontam-min-hits', type=int, default=1, metavar='N',
+                    help='Minimum colliding n-grams to flag a record (default 1).')
+    dg.add_argument('--decontam-cache', default=None, metavar='DIR',
+                    help='Benchmark download cache dir (default ~/.cache/llm-sanitizer-pro/benchmarks).')
+
     # CSV / Excel
     iog = parser.add_argument_group('CSV / Excel Options')
     iog.add_argument('--csv-delimiter', default=None, metavar='CHAR')
@@ -281,6 +299,12 @@ def main() -> None:
                 print(json.dumps(template, indent=2))
         else:
             print(json.dumps(template, indent=2))
+        sys.exit(0)
+
+    if args.decontaminate and args.decontaminate.strip().lower() == 'list':
+        from sanitizer_pro.decontam import KNOWN_BENCHMARKS
+        for name, spec in sorted(KNOWN_BENCHMARKS.items()):
+            print(f"{name:<12} {spec.repo:<40} {spec.note}")
         sys.exit(0)
 
     if args.input is None or args.output is None:
@@ -392,6 +416,21 @@ def main() -> None:
     truncator = TokenTruncator(args.max_tokens, args.tokenizer) if args.max_tokens else None
     pseudo_registry = PseudoRegistry() if args.pii_pseudonymize else None
 
+    contamination_index = None
+    if args.decontaminate or args.decontam_refs:
+        from sanitizer_pro.decontam import build_index, resolve_benchmark_names
+        try:
+            contamination_index = build_index(
+                benchmarks=resolve_benchmark_names(args.decontaminate) if args.decontaminate else None,
+                ref_files=[p.strip() for p in args.decontam_refs.split(',') if p.strip()] if args.decontam_refs else None,
+                cache_dir=args.decontam_cache, ngram=args.decontam_ngram,
+                min_hits=args.decontam_min_hits, encoding=args.encoding,
+            )
+        except (ConfigurationError, ImportError) as exc:
+            logging.error(str(exc)); sys.exit(1)
+        except Exception as exc:
+            logging.error(f"Failed to build decontamination index: {exc}"); sys.exit(1)
+
     logging.info(f"Start: {args.input} ({input_fmt}) → {args.output} ({output_fmt}) | jobs={args.jobs}")
 
     no_output = args.dry_run or args.stats_only
@@ -421,6 +460,10 @@ def main() -> None:
             elif reason == FilterReason.CODE: run_stats.filtered_code += 1
             elif reason == FilterReason.PROFANITY: run_stats.filtered_profanity += 1
             else: run_stats.filtered_quality += 1
+            return
+
+        if contamination_index is not None and contamination_index.is_contaminated(quality_text):
+            run_stats.filtered_contaminated += 1
             return
 
         if args.sample is not None and random.random() >= args.sample:
@@ -545,6 +588,7 @@ def main() -> None:
         f"Filtered (require)      : {run_stats.filtered_require:,}",
         f"Filtered (code)         : {run_stats.filtered_code:,}",
         f"Filtered (profanity)    : {run_stats.filtered_profanity:,}",
+        f"Filtered (contaminated) : {run_stats.filtered_contaminated:,}",
         f"Deduplicated            : {run_stats.deduplicated:,}",
         f"Malformed               : {run_stats.malformed:,}",
         f"Sampled out             : {run_stats.sampled_out:,}",

@@ -11,6 +11,7 @@ Production-grade, modular dataset sanitization, PII redaction, and curation pipe
   - Fuzzy near-dedup via MinHash + LSH (`--fuzzy-dedup`, tunable `--fuzzy-threshold`).
 - **LLM-Native Formatting**: Direct export to ChatML (`--format-chatml`) and Alpaca/Instruct (`--format-instruct`) schemas, with automatic key mapping (`prompt`/`question`/`response`/`completion`/…).
 - **Quality & Content Filtering**: Length/word/uniqueness/ASCII gates, all-caps rejection, code detection, profanity filtering, language filtering with confidence gating, and pluggable Python quality scripts.
+- **Benchmark Decontamination**: n-gram overlap removal against eval test sets (`--decontaminate mmlu,gsm8k,humaneval,arc,hellaswag,truthfulqa,winogrande,mbpp`) — benchmarks are auto-downloaded from the Hugging Face Hub and cached, or supply your own reference files with `--decontam-refs`.
 - **Dataset Splitting & Sharding**: `--split train=0.9,val=0.05,test=0.05` or fixed-size shards with `--shard-size`.
 - **Crash-Safe I/O**: Atomic JSON writes (`.tmp` + `os.replace()`), safe HTML stripping via `html.parser`, structure-preserving text normalization (newlines kept for code/markdown data).
 - **Parallel Processing**: `--jobs N` multiprocessing with accurate statistics.
@@ -39,7 +40,25 @@ sanitize --input data.jsonl --output out.jsonl --split train=0.9,val=0.05,test=0
 
 # Preview effects without writing output
 sanitize --input data.jsonl --output out.jsonl --dry-run --stats-file report.json
+
+# Remove records that overlap with benchmark test sets (auto-downloads + caches them)
+sanitize --input data.jsonl --output clean.jsonl --decontaminate gsm8k,mmlu,humaneval
+
+# Decontaminate against your own held-out eval set
+sanitize --input data.jsonl --output clean.jsonl --decontam-refs my_eval_set.jsonl
+
+# List available built-in benchmarks
+sanitize --decontaminate list
 ```
+
+### How decontamination works
+
+A record is flagged as contaminated when at least `--decontam-min-hits` (default 1) of its
+normalized word 8-grams (`--decontam-ngram`) also appear in the reference index built from
+benchmark test sets — the same n-gram collision approach used to decontaminate GPT-3 and
+Llama training data. Benchmark items shorter than the n-gram size are matched whole.
+Named benchmarks require `pyarrow`; `--decontam-refs` files work with any supported input
+format and no extra dependencies.
 
 Run `sanitize --help` for the full option reference, or `sanitize --generate-config yaml` to print a config template usable with `--config`.
 
