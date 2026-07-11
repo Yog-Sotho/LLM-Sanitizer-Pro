@@ -6,6 +6,7 @@ Production-grade, modular dataset sanitization, PII redaction, and curation pipe
 
 - **Multi-Format Streaming**: JSONL, JSON (ijson streaming), CSV/TSV, TXT, Parquet, Excel, and gzip variants — from files or stdin/stdout.
 - **Advanced PII Redaction**: Email, URL, phone, credit card, SSN, and IP detection with three modes: token replacement, partial masking (`--pii-mask`), and stable pseudonymization (`--pii-pseudonymize` + exportable mapping).
+- **NER-Backed PII Detection** (`--pii-ner`): person names, locations, and organizations detected with a named-entity model (spaCy or transformers) — the PII that regexes fundamentally cannot catch. All three redaction modes apply ("Sarah Connor" → `[PII_PERSON]`, `S*** C***`, or a stable `Person_0001`).
 - **High-Performance Deduplication**:
   - Exact SHA-256 dedup (in-memory or disk-backed SQLite for huge datasets).
   - Fuzzy near-dedup via MinHash + LSH (`--fuzzy-dedup`, tunable `--fuzzy-threshold`).
@@ -49,7 +50,26 @@ sanitize --input data.jsonl --output clean.jsonl --decontam-refs my_eval_set.jso
 
 # List available built-in benchmarks
 sanitize --decontaminate list
+
+# NER-backed PII: redact person names too (see install note below)
+sanitize --input data.jsonl --output clean.jsonl --remove-pii --pii-ner
+
+# Pseudonymize everything consistently (names, emails, …) and keep the mapping
+sanitize --input data.jsonl --output clean.jsonl --remove-pii --pii-ner \
+    --pii-pseudonymize --pseudo-map-file mapping.json
 ```
+
+### NER-backed PII install
+
+`--pii-ner` auto-selects an installed backend (spaCy preferred, transformers fallback):
+
+```bash
+pip install "llm-sanitizer-pro[ner]"
+pip install "en_core_web_sm @ https://huggingface.co/spacy/en_core_web_sm/resolve/main/en_core_web_sm-any-py3-none-any.whl"
+```
+
+Use `--pii-ner-entities person,location,org` to widen coverage (default: `person`) and
+`--pii-ner-model` to swap in another spaCy model or HF token-classification model.
 
 ### How decontamination works
 

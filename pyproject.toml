@@ -34,6 +34,9 @@ all = [
     "datasketch>=1.6.0",
     "transformers>=4.30.0",
 ]
+ner = [
+    "spacy>=3.5.0",
+]
 dev = [
     "ruff>=0.1.0",
     "mypy>=1.5.0",

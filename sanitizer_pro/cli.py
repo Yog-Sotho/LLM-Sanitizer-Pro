@@ -220,6 +220,14 @@ def build_parser() -> argparse.ArgumentParser:
     fg.add_argument('--pii-pseudonymize', action='store_true')
     fg.add_argument('--pseudo-map-file', default=None, metavar='PATH')
     fg.add_argument('--pii-patterns-file', default=None, metavar='PATH')
+    fg.add_argument('--pii-ner', action='store_true',
+                    help='Also detect PII with a named-entity model (person names by default). '
+                         'Requires spacy (+en_core_web_sm) or transformers.')
+    fg.add_argument('--pii-ner-backend', default='auto', choices=['auto', 'spacy', 'transformers'])
+    fg.add_argument('--pii-ner-entities', default='person', metavar='KINDS',
+                    help='Comma-separated entity kinds to redact: person,location,org (default: person).')
+    fg.add_argument('--pii-ner-model', default=None, metavar='NAME',
+                    help='Override the NER model (spaCy model name or HF model id).')
     fg.add_argument('--clean-html', action='store_true')
     fg.add_argument('--paragraph-mode', action='store_true')
     fg.add_argument('--txt-fallback-field', default=None, metavar='FIELD')
@@ -355,6 +363,7 @@ def main() -> None:
     # Validation
     if args.pii_mask and not args.remove_pii: logging.warning("--pii-mask has no effect without --remove-pii.")
     if args.pii_pseudonymize and not args.remove_pii: logging.warning("--pii-pseudonymize has no effect without --remove-pii.")
+    if args.pii_ner and not args.remove_pii: logging.warning("--pii-ner has no effect without --remove-pii.")
     if args.sample is not None and not (0 < args.sample <= 1.0):
         logging.error("--sample must be in (0, 1]."); sys.exit(1)
     if args.jobs < 1:
@@ -415,6 +424,18 @@ def main() -> None:
         logging.error(f"Failed to load auxiliary config: {exc}"); sys.exit(1)
     truncator = TokenTruncator(args.max_tokens, args.tokenizer) if args.max_tokens else None
     pseudo_registry = PseudoRegistry() if args.pii_pseudonymize else None
+
+    ner_redactor = None
+    if args.pii_ner and args.remove_pii:
+        from sanitizer_pro.ner import NERRedactor
+        try:
+            # Built here even for --jobs > 1 (workers reload their own copy) so
+            # a missing backend fails fast with a clear message.
+            ner_redactor = NERRedactor(backend=args.pii_ner_backend,
+                                       entities=str(args.pii_ner_entities).split(','),
+                                       model=args.pii_ner_model)
+        except (ConfigurationError, ImportError) as exc:
+            logging.error(str(exc)); sys.exit(1)
 
     contamination_index = None
     if args.decontaminate or args.decontam_refs:
@@ -540,7 +561,8 @@ def main() -> None:
             sanitized, reason, quality_text, lang = sanitize_record(
                 record, args, text_fields=args.text_fields_list, extra_pii_patterns=extra_pii,
                 lang_filter=lang_filter_set, field_ops=field_ops, truncator=truncator,
-                pseudo_registry=pseudo_registry, require_fields=args.require_fields_list, quality_fn=quality_fn
+                pseudo_registry=pseudo_registry, require_fields=args.require_fields_list, quality_fn=quality_fn,
+                ner_redactor=ner_redactor
             )
             _handle(sanitized, reason, quality_text, lang, writer)
 

@@ -1,5 +1,7 @@
 """End-to-end CLI tests via subprocess."""
 import json
+
+import pytest
 import subprocess
 import sys
 from pathlib import Path
@@ -143,3 +145,26 @@ def test_decontaminate_unknown_benchmark(tmp_path):
                 '--decontaminate', 'nosuchbench')
     assert r.returncode == 1
     assert 'Unknown benchmark' in r.stderr
+
+
+def _spacy_available() -> bool:
+    try:
+        import spacy
+        spacy.load('en_core_web_sm')
+        return True
+    except Exception:
+        return False
+
+
+@pytest.mark.skipif(not _spacy_available(), reason="spacy en_core_web_sm not installed")
+def test_pii_ner_end_to_end(tmp_path):
+    inp, out = tmp_path / "in.jsonl", tmp_path / "out.jsonl"
+    write_jsonl(inp, [{"text": "Please forward the quarterly report to Sarah Connor "
+                               "and John Smith before the board meeting on Friday."}])
+    r = run_cli('--input', str(inp), '--output', str(out),
+                '--remove-pii', '--pii-ner', '--pii-ner-backend', 'spacy',
+                '--min-chars', '20', '--min-words', '5', '--no-progress', '--quiet')
+    assert r.returncode == 0, r.stderr
+    rec = json.loads(out.read_text().splitlines()[0])
+    assert '[PII_PERSON]' in rec['text']
+    assert 'Sarah Connor' not in rec['text'] and 'John Smith' not in rec['text']

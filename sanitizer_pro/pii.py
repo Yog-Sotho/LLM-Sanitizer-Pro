@@ -88,6 +88,7 @@ class PseudoRegistry:
         'email': 'email_{n:04d}@redacted.local', 'phone': 'phone_{n:04d}',
         'card': 'card_{n:04d}', 'ip': '0.0.0.{n}', 'ssn': '000-00-{n:04d}',
         'url': 'https://redacted-{n:04d}.local', 'custom': 'pii_{n:04d}',
+        'person': 'Person_{n:04d}', 'location': 'Place_{n:04d}', 'org': 'Org_{n:04d}',
     }
 
     def __init__(self) -> None:
