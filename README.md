@@ -18,6 +18,7 @@ Production-grade, modular dataset sanitization, PII redaction, and curation pipe
 - **Benchmark Decontamination**: n-gram overlap removal against eval test sets (`--decontaminate mmlu,gsm8k,humaneval,arc,hellaswag,truthfulqa,winogrande,mbpp`) — benchmarks are auto-downloaded from the Hugging Face Hub and cached, or supply your own reference files with `--decontam-refs`.
 - **Dataset Splitting & Sharding**: `--split train=0.9,val=0.05,test=0.05` or fixed-size shards with `--shard-size`.
 - **Crash-Safe I/O**: Atomic JSON writes (`.tmp` + `os.replace()`), safe HTML stripping via `html.parser`, structure-preserving text normalization (newlines kept for code/markdown data).
+- **Resumable Runs** (`--resume`): progress is checkpointed to `<output>.checkpoint.json` every `--checkpoint-interval` records; after a crash or Ctrl-C, rerun the same command and the pipeline skips already-processed input, restores statistics and pseudonym state, and appends to the output. Pair with `--dedup-backend sqlite --dedup-db-path` for dedup state that also survives the restart.
 - **Parallel Processing**: `--jobs N` multiprocessing with accurate statistics.
 - **Audit Report** (`--report audit.html`): a self-contained HTML artifact per run — removal funnel, PII redaction counts by type, quality-score distribution, chat-failure breakdown, and before/after redaction samples. Light/dark aware, no external assets; archive it next to the dataset or attach it to a compliance ticket. Also available from the Python API via `s.write_report(path)`.
 
@@ -90,6 +91,10 @@ sanitize --input data.jsonl --output clean.jsonl --remove-pii --deduplicate \
 # Sanitize a Hugging Face Hub dataset directly (cached under ~/.cache)
 sanitize --input hf://openai/gsm8k/main/train --output clean.jsonl \
     --remove-pii --deduplicate --report audit.html
+
+# Long job that survives crashes: checkpoint + durable dedup, rerun to continue
+sanitize --input huge.jsonl --output clean.jsonl --resume \
+    --deduplicate --dedup-backend sqlite --dedup-db-path dedup.db
 ```
 
 ### NER-backed PII install

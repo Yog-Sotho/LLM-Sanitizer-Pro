@@ -108,6 +108,16 @@ class PseudoRegistry:
     def to_dict(self) -> Dict[str, str]:
         return dict(self._map)
 
+    def to_state(self) -> Dict[str, Dict]:
+        return {'map': dict(self._map), 'counts': dict(self._counts)}
+
+    @classmethod
+    def from_state(cls, state: Dict[str, Dict]) -> 'PseudoRegistry':
+        reg = cls()
+        reg._map = dict(state.get('map', {}))
+        reg._counts = dict(state.get('counts', {}))
+        return reg
+
 def redact_pii(
     text: str,
     mask: bool = False,

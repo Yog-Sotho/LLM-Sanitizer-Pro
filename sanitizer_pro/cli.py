@@ -263,6 +263,12 @@ def build_parser() -> argparse.ArgumentParser:
     rt.add_argument('--report', default=None, metavar='PATH',
                     help='Write a self-contained HTML audit report (removal funnel, PII '
                          'counts by type, sample diffs) to PATH.')
+    rt.add_argument('--resume', action='store_true',
+                    help='Checkpoint progress to <output>.checkpoint.json and, when a '
+                         'checkpoint exists, continue the run from where it stopped '
+                         '(jsonl/txt/csv outputs, --jobs 1).')
+    rt.add_argument('--checkpoint-interval', type=int, default=10_000, metavar='N',
+                    help='Write a checkpoint every N input records (default 10000).')
 
     return parser
 
@@ -407,6 +413,37 @@ def main() -> None:
         else:
             logging.error("Cannot detect output format. Supply --output-format."); sys.exit(1)
 
+    # Resumable runs
+    resume_skip = 0
+    resume_stats: Optional[Any] = None
+    resume_pseudo: Optional[Dict[str, Any]] = None
+    if args.resume:
+        from sanitizer_pro.checkpoint import load_checkpoint, warn_about_volatile_state
+        problems = []
+        if args.input == _STDIN: problems.append("stdin input")
+        if args.output in {_STDOUT, '/dev/null'}: problems.append("stdout//dev/null output")
+        if args.dry_run or args.stats_only: problems.append("--dry-run/--stats-only")
+        if split_spec or args.shard_size: problems.append("--split/--shard-size")
+        if args.keep_top_percent is not None: problems.append("--keep-top-percent")
+        if args.jobs > 1: problems.append("--jobs > 1")
+        if output_fmt not in {'.jsonl', '.txt', '.csv'}:
+            problems.append(f"{output_fmt} output (appendable formats: .jsonl/.txt/.csv)")
+        if problems:
+            logging.error(f"--resume is not compatible with: {', '.join(problems)}"); sys.exit(1)
+        if args.checkpoint_interval < 1:
+            logging.error("--checkpoint-interval must be >= 1."); sys.exit(1)
+        try:
+            ckpt = load_checkpoint(args.output, args.input)
+        except ConfigurationError as exc:
+            logging.error(str(exc)); sys.exit(1)
+        if ckpt:
+            resume_skip = int(ckpt['records_read'])
+            resume_stats = ckpt['stats']
+            resume_pseudo = ckpt.get('pseudo')
+            warn_about_volatile_state(args)
+            logging.info(f"Resuming from checkpoint: skipping {resume_skip:,} "
+                         "already-processed input records, appending to output.")
+
     # Load optional resources
     try:
         extra_pii = load_custom_pii_patterns(args.pii_patterns_file) if args.pii_patterns_file else None
@@ -415,7 +452,10 @@ def main() -> None:
     except Exception as exc:
         logging.error(f"Failed to load auxiliary config: {exc}"); sys.exit(1)
     truncator = TokenTruncator(args.max_tokens, args.tokenizer) if args.max_tokens else None
-    pseudo_registry = PseudoRegistry() if args.pii_pseudonymize else None
+    if args.pii_pseudonymize:
+        pseudo_registry = PseudoRegistry.from_state(resume_pseudo) if resume_pseudo else PseudoRegistry()
+    else:
+        pseudo_registry = None
 
     ner_redactor = None
     if args.pii_ner and args.remove_pii:
@@ -479,7 +519,7 @@ def main() -> None:
                                fuzzy_threshold=args.fuzzy_threshold) if (args.deduplicate or args.fuzzy_dedup) else None
     except ImportError as exc:
         logging.error(str(exc)); sys.exit(1)
-    run_stats = RunStats()
+    run_stats = RunStats.from_state(resume_stats) if resume_stats else RunStats()
 
     try:
         record_iter: Iterator[Dict[str, Any]] = read_records(
@@ -492,6 +532,28 @@ def main() -> None:
         )
     except Exception as exc:
         logging.critical(f"Failed to open input: {exc}"); sys.exit(1)
+
+    if resume_skip:
+        def _skip_consumed(it: Iterator[Dict[str, Any]], n: int) -> Iterator[Dict[str, Any]]:
+            consumed = 0
+            for rec in it:
+                if consumed < n:
+                    consumed += 1
+                    continue
+                yield rec
+        record_iter = _skip_consumed(record_iter, resume_skip)
+
+    def _maybe_checkpoint(writer: Any) -> None:
+        if not args.resume or run_stats.total % args.checkpoint_interval != 0:
+            return
+        from sanitizer_pro.checkpoint import save_checkpoint
+        if writer is not None:
+            writer.flush()
+        if deduper is not None and hasattr(deduper, 'flush'):
+            deduper.flush()
+        save_checkpoint(args.output, input_path=args.input, records_read=run_stats.total,
+                        stats_state=run_stats.to_state(),
+                        pseudo_state=pseudo_registry.to_state() if pseudo_registry else None)
 
     use_progress = TQDM_AVAILABLE and not args.no_progress and not args.quiet and args.input != _STDIN
 
@@ -652,6 +714,7 @@ def main() -> None:
                     and sum(run_stats.pii_counts.values()) > pii_before):
                 audit_samples.add_pii_diff(record, sanitized)
             _handle(sanitized, reason, quality_text, lang, writer, original=record)
+            _maybe_checkpoint(writer)
 
     def _run(writer: Any) -> None:
         _process(writer=writer)
@@ -668,11 +731,26 @@ def main() -> None:
             writer_ctx = ShardedWriter(args.output, output_fmt, args.encoding, args.shard_size, txt_fallback_field=args.txt_fallback_field)
             with writer_ctx as writer: _run(writer=writer)
         else:
-            writer_ctx = StreamingWriter(args.output, output_fmt, args.encoding, txt_fallback_field=args.txt_fallback_field)
+            writer_ctx = StreamingWriter(args.output, output_fmt, args.encoding,
+                                         txt_fallback_field=args.txt_fallback_field,
+                                         append=resume_stats is not None)
             with writer_ctx as writer: _run(writer=writer)
+        if args.resume:
+            from sanitizer_pro.checkpoint import clear_checkpoint
+            clear_checkpoint(args.output)
     except KeyboardInterrupt:
         logging.warning("Interrupted — flushing output …")
         if writer_ctx is not None and hasattr(writer_ctx, 'flush'): writer_ctx.flush()
+        if args.resume:
+            from sanitizer_pro.checkpoint import save_checkpoint
+            try:
+                save_checkpoint(args.output, input_path=args.input,
+                                records_read=run_stats.total,
+                                stats_state=run_stats.to_state(),
+                                pseudo_state=pseudo_registry.to_state() if pseudo_registry else None)
+                logging.info("Checkpoint saved; rerun the same command with --resume to continue.")
+            except Exception as exc:
+                logging.warning(f"Could not save checkpoint on interrupt: {exc}")
         sys.exit(130)
     except Exception as exc:
         logging.critical(f"Fatal error: {exc}", exc_info=True)
