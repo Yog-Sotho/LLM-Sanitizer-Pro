@@ -141,7 +141,8 @@ class NERRedactor:
             "Errors: " + '; '.join(errors))
 
     def redact(self, text: str, mask: bool = False,
-               pseudo_registry: Optional[PseudoRegistry] = None) -> str:
+               pseudo_registry: Optional[PseudoRegistry] = None,
+               counters: Optional[dict] = None) -> str:
         if not text:
             return text
         spans = [s for s in self._detect(text) if s.kind in self.entities]
@@ -156,6 +157,9 @@ class NERRedactor:
             if s.start >= last_end:
                 kept.append(s)
                 last_end = s.end
+        if counters is not None:
+            for s in kept:
+                counters[s.kind] = counters.get(s.kind, 0) + 1
         for s in reversed(kept):
             value = text[s.start:s.end]
             if pseudo_registry is not None:

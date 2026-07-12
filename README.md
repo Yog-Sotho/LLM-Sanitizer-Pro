@@ -18,6 +18,7 @@ Production-grade, modular dataset sanitization, PII redaction, and curation pipe
 - **Dataset Splitting & Sharding**: `--split train=0.9,val=0.05,test=0.05` or fixed-size shards with `--shard-size`.
 - **Crash-Safe I/O**: Atomic JSON writes (`.tmp` + `os.replace()`), safe HTML stripping via `html.parser`, structure-preserving text normalization (newlines kept for code/markdown data).
 - **Parallel Processing**: `--jobs N` multiprocessing with accurate statistics.
+- **Audit Report** (`--report audit.html`): a self-contained HTML artifact per run — removal funnel, PII redaction counts by type, quality-score distribution, chat-failure breakdown, and before/after redaction samples. Light/dark aware, no external assets; archive it next to the dataset or attach it to a compliance ticket. Also available from the Python API via `s.write_report(path)`.
 
 ## 📦 Installation
 
@@ -80,6 +81,10 @@ sanitize --input data.jsonl --output scored.jsonl --quality-score-field quality
 # Perplexity-based scoring with a causal LM (pip install transformers torch)
 sanitize --input data.jsonl --output clean.jsonl --quality-scorer perplexity \
     --quality-model distilgpt2 --quality-min-score 0.4
+
+# Full pipeline with an HTML audit report artifact
+sanitize --input data.jsonl --output clean.jsonl --remove-pii --deduplicate \
+    --quality-min-score 0.5 --report audit.html
 ```
 
 ### NER-backed PII install
@@ -104,6 +109,36 @@ Named benchmarks require `pyarrow`; `--decontam-refs` files work with any suppor
 format and no extra dependencies.
 
 Run `sanitize --help` for the full option reference, or `sanitize --generate-config yaml` to print a config template usable with `--config`.
+
+## 🐍 Python API
+
+The CLI is a thin layer over a first-class library — services should embed it
+directly instead of shelling out:
+
+```python
+from sanitizer_pro import Sanitizer, SanitizerConfig
+
+config = SanitizerConfig(
+    remove_pii=True, deduplicate=True,
+    quality_min_score=0.5, quality_score_field="_q",
+    decontaminate=["gsm8k", "mmlu"], validate_chat=False,
+)
+
+with Sanitizer(config) as s:
+    clean = list(s.process(records))     # iterable of dicts in → clean dicts out
+    report = s.stats.to_dict()           # same schema as --stats-file
+
+    # Or inspect records one at a time (audit-UI building block):
+    result = s.process_record({"text": "..."})
+    result.kept        # bool
+    result.reason      # 'quality' | 'duplicate' | 'contaminated' | 'chat:<detail>' | ...
+    result.score       # quality score in [0, 1] when scoring is enabled
+```
+
+`SanitizerConfig` mirrors the CLI flags with the same names and defaults.
+Dedup and pseudonym state persist across calls on one `Sanitizer` instance;
+`keep_top_percent` applies in `process()` (it needs the whole stream). Export
+pseudonym mappings with `s.export_pseudonym_map(path)`.
 
 ## 🧪 Development
 

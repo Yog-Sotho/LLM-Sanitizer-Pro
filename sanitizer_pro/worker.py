@@ -44,10 +44,13 @@ def _worker_init(
             model=getattr(args_ns, 'pii_ner_model', None),
         )
 
-def _worker_fn(record: Dict[str, Any]) -> Tuple[Optional[Dict[str, Any]], Optional[FilterReason], str, Optional[str]]:
-    return sanitize_record(
+def _worker_fn(record: Dict[str, Any]) -> Tuple[
+        Optional[Dict[str, Any]], Optional[FilterReason], str, Optional[str], Dict[str, int]]:
+    pii_counts: Dict[str, int] = {}
+    sanitized, reason, quality_text, lang = sanitize_record(
         record, _w_args, text_fields=_w_text_fields, extra_pii_patterns=_w_extra_pii,
         lang_filter=_w_lang_filter, field_ops=_w_field_ops, truncator=_w_truncator,
         pseudo_registry=None, require_fields=_w_req_fields, quality_fn=_w_quality_fn,
-        ner_redactor=_w_ner
+        ner_redactor=_w_ner, pii_counters=pii_counts
     )
+    return sanitized, reason, quality_text, lang, pii_counts

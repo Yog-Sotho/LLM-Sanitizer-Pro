@@ -281,3 +281,37 @@ def test_invalid_score_flags(tmp_path):
     r = run_cli('--input', str(inp), '--output', str(tmp_path / 'o.jsonl'),
                 '--keep-top-percent', '0')
     assert r.returncode == 1
+
+
+def test_html_report_end_to_end(tmp_path):
+    inp, out = tmp_path / "in.jsonl", tmp_path / "out.jsonl"
+    report = tmp_path / "audit.html"
+    write_jsonl(inp, [
+        {"text": "Contact john@example.com about the quarterly report published this month."},
+        {"text": "Contact john@example.com about the quarterly report published this month."},
+        {"text": "short"},
+    ])
+    r = run_cli('--input', str(inp), '--output', str(out),
+                '--remove-pii', '--deduplicate', '--report', str(report),
+                '--min-chars', '20', '--min-words', '5', '--no-progress', '--quiet')
+    assert r.returncode == 0, r.stderr
+    html = report.read_text()
+    assert 'Sanitization Audit Report' in html
+    assert 'Email addresses' in html          # PII counts by type
+    assert 'Deduplication' in html            # removal funnel
+    assert 'PII redaction samples' in html    # before/after diffs
+    assert 'john@example.com' in html         # the 'before' sample shows the original
+
+
+def test_html_report_with_parallel_jobs(tmp_path):
+    inp, out = tmp_path / "in.jsonl", tmp_path / "out.jsonl"
+    report = tmp_path / "audit.html"
+    write_jsonl(inp, [{"text": f"Contact user{i}@example.com about item number {i} in the catalog."}
+                      for i in range(20)])
+    r = run_cli('--input', str(inp), '--output', str(out),
+                '--remove-pii', '--jobs', '2', '--report', str(report),
+                '--min-chars', '20', '--min-words', '5', '--no-progress', '--quiet')
+    assert r.returncode == 0, r.stderr
+    html = report.read_text()
+    # PII counts are aggregated from workers even in parallel mode
+    assert 'Email addresses' in html and '>20<' in html.replace(',', '')
