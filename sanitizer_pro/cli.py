@@ -6,6 +6,7 @@ import multiprocessing
 import os
 import random
 import sys
+import time
 from pathlib import Path
 from typing import Any, Dict, Iterator, List, Optional, Tuple
 
@@ -256,6 +257,9 @@ def build_parser() -> argparse.ArgumentParser:
     rt.add_argument('--stats-only', action='store_true')
     rt.add_argument('--debug-records', action='store_true')
     rt.add_argument('--stats-file', default=None, metavar='PATH')
+    rt.add_argument('--report', default=None, metavar='PATH',
+                    help='Write a self-contained HTML audit report (removal funnel, PII '
+                         'counts by type, sample diffs) to PATH.')
 
     return parser
 
@@ -455,6 +459,7 @@ def main() -> None:
             logging.error(f"Failed to build decontamination index: {exc}"); sys.exit(1)
 
     logging.info(f"Start: {args.input} ({input_fmt}) → {args.output} ({output_fmt}) | jobs={args.jobs}")
+    run_started = time.monotonic()
 
     no_output = args.dry_run or args.stats_only
     try:
@@ -476,17 +481,24 @@ def main() -> None:
 
     use_progress = TQDM_AVAILABLE and not args.no_progress and not args.quiet and args.input != _STDIN
 
+    audit_samples = None
+    if args.report:
+        from sanitizer_pro.report import AuditSampleCollector
+        audit_samples = AuditSampleCollector()
+
     # (score, sanitized, quality_text, lang) survivors awaiting top-P% selection
     topk_buffer: Optional[List[Tuple[Optional[float], Dict[str, Any], str, Optional[str]]]] = \
         [] if args.keep_top_percent is not None else None
 
-    def _handle(sanitized: Optional[Dict[str, Any]], reason: Optional[FilterReason], quality_text: str, lang: Optional[str], writer: Any) -> None:
+    def _handle(sanitized: Optional[Dict[str, Any]], reason: Optional[FilterReason], quality_text: str, lang: Optional[str], writer: Any, original: Any = None) -> None:
         if sanitized is None:
             if reason == FilterReason.LANGUAGE: run_stats.filtered_lang += 1
             elif reason == FilterReason.REQUIRE: run_stats.filtered_require += 1
             elif reason == FilterReason.CODE: run_stats.filtered_code += 1
             elif reason == FilterReason.PROFANITY: run_stats.filtered_profanity += 1
             else: run_stats.filtered_quality += 1
+            if audit_samples is not None and original is not None:
+                audit_samples.add_dropped((reason or FilterReason.QUALITY).value, original)
             return
 
         if chat_validator is not None:
@@ -496,10 +508,14 @@ def main() -> None:
                 run_stats.chat_invalid_reasons[chat_reason] = \
                     run_stats.chat_invalid_reasons.get(chat_reason, 0) + 1
                 logging.debug(f"Chat validation rejected record: {chat_reason}")
+                if audit_samples is not None:
+                    audit_samples.add_dropped('chat', sanitized)
                 return
 
         if contamination_index is not None and contamination_index.is_contaminated(quality_text):
             run_stats.filtered_contaminated += 1
+            if audit_samples is not None:
+                audit_samples.add_dropped('contaminated', sanitized)
             return
 
         score: Optional[float] = None
@@ -507,6 +523,8 @@ def main() -> None:
             score = quality_scorer.score(quality_text)
             if args.quality_min_score is not None and score < args.quality_min_score:
                 run_stats.filtered_low_score += 1
+                if audit_samples is not None:
+                    audit_samples.add_dropped('low_score', sanitized)
                 return
 
         if args.sample is not None and random.random() >= args.sample:
@@ -577,11 +595,12 @@ def main() -> None:
                 imap_iter = pool.imap(_worker_fn, _dispatchable(), chunksize=args.chunk_size)
                 if use_progress:
                     imap_iter = _tqdm(imap_iter, desc="Processing", unit="rec", dynamic_ncols=True, smoothing=0.1)
-                for sanitized, reason, quality_text, lang in imap_iter:
+                for sanitized, reason, quality_text, lang, wcounts in imap_iter:
                     run_stats.total += 1
                     if args.dry_run and run_stats.total > args.dry_run_size:
                         stopped_early = True
                         break
+                    run_stats.merge_pii_counts(wcounts)
                     _handle(sanitized, reason, quality_text, lang, writer)
             except BaseException:
                 stopped_early = True
@@ -607,13 +626,18 @@ def main() -> None:
                 run_stats.malformed += 1
                 continue
             
+            pii_before = sum(run_stats.pii_counts.values())
             sanitized, reason, quality_text, lang = sanitize_record(
                 record, args, text_fields=args.text_fields_list, extra_pii_patterns=extra_pii,
                 lang_filter=lang_filter_set, field_ops=field_ops, truncator=truncator,
                 pseudo_registry=pseudo_registry, require_fields=args.require_fields_list, quality_fn=quality_fn,
-                ner_redactor=ner_redactor
+                ner_redactor=ner_redactor, pii_counters=run_stats.pii_counts
             )
-            _handle(sanitized, reason, quality_text, lang, writer)
+            if (audit_samples is not None and audit_samples.wants_pii_diffs
+                    and sanitized is not None
+                    and sum(run_stats.pii_counts.values()) > pii_before):
+                audit_samples.add_pii_diff(record, sanitized)
+            _handle(sanitized, reason, quality_text, lang, writer, original=record)
 
     def _run(writer: Any) -> None:
         _process(writer=writer)
@@ -682,6 +706,34 @@ def main() -> None:
             Path(args.stats_file).write_text(json.dumps({'version': '3.0', **run_stats.to_dict()}, indent=2), encoding='utf-8')
         except Exception as exc:
             logging.warning(f"Could not write stats file: {exc}")
+
+    if args.report:
+        from sanitizer_pro.report import generate_report_html
+        features = [name for enabled, name in [
+            (args.remove_pii, 'PII redaction' + (' + NER' if args.pii_ner else '')),
+            (args.pii_pseudonymize, 'pseudonymization'),
+            (args.deduplicate, f'exact dedup ({args.dedup_backend})'),
+            (args.fuzzy_dedup, f'fuzzy dedup (t={args.fuzzy_threshold})'),
+            (bool(args.decontaminate or args.decontam_refs),
+             'decontamination' + (f' ({args.decontaminate})' if args.decontaminate else '')),
+            (args.validate_chat, 'chat validation'),
+            (quality_scorer is not None, f'quality scoring ({args.quality_scorer})'),
+            (args.clean_html, 'HTML stripping'),
+            (bool(lang_filter_set), f'language filter ({args.lang_filter})'),
+        ] if enabled]
+        meta = {
+            'Input': f"{args.input} ({input_fmt})",
+            'Output': f"{args.output} ({output_fmt}){mode_tag}",
+            'Active features': ', '.join(features) or 'none',
+            'Duration': f"{time.monotonic() - run_started:.1f}s | jobs={args.jobs}",
+            'version': '3.0',
+        }
+        try:
+            Path(args.report).write_text(
+                generate_report_html(run_stats.to_dict(), audit_samples, meta), encoding='utf-8')
+            logging.info(f"Audit report written to {args.report}")
+        except Exception as exc:
+            logging.warning(f"Could not write audit report: {exc}")
 
 if __name__ == "__main__":
     main()

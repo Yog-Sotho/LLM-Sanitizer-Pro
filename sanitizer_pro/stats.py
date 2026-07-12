@@ -29,6 +29,12 @@ class RunStats:
         self.char_hist: Dict[int, int] = {b: 0 for b in _CHAR_BUCKETS}
         self.word_hist: Dict[int, int] = {b: 0 for b in _WORD_BUCKETS}
         self.lang_dist: Dict[str, int] = {}
+        self.pii_counts: Dict[str, int] = {}
+
+    def merge_pii_counts(self, counts: Optional[Dict[str, int]]) -> None:
+        if counts:
+            for kind, n in counts.items():
+                self.pii_counts[kind] = self.pii_counts.get(kind, 0) + n
 
     def record_kept(self, text: str, lang: Optional[str] = None) -> None:
         self.kept += 1
@@ -73,4 +79,5 @@ class RunStats:
             'char_length_histogram': {f">={k}": v for k, v in sorted(self.char_hist.items())},
             'word_count_histogram': {f">={k}": v for k, v in sorted(self.word_hist.items())},
             'language_distribution': dict(sorted(self.lang_dist.items(), key=lambda x: -x[1])),
+            'pii_redactions': dict(sorted(self.pii_counts.items(), key=lambda x: -x[1])),
         }

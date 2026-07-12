@@ -18,6 +18,7 @@ Production-grade, modular dataset sanitization, PII redaction, and curation pipe
 - **Dataset Splitting & Sharding**: `--split train=0.9,val=0.05,test=0.05` or fixed-size shards with `--shard-size`.
 - **Crash-Safe I/O**: Atomic JSON writes (`.tmp` + `os.replace()`), safe HTML stripping via `html.parser`, structure-preserving text normalization (newlines kept for code/markdown data).
 - **Parallel Processing**: `--jobs N` multiprocessing with accurate statistics.
+- **Audit Report** (`--report audit.html`): a self-contained HTML artifact per run — removal funnel, PII redaction counts by type, quality-score distribution, chat-failure breakdown, and before/after redaction samples. Light/dark aware, no external assets; archive it next to the dataset or attach it to a compliance ticket. Also available from the Python API via `s.write_report(path)`.
 
 ## 📦 Installation
 
@@ -80,6 +81,10 @@ sanitize --input data.jsonl --output scored.jsonl --quality-score-field quality
 # Perplexity-based scoring with a causal LM (pip install transformers torch)
 sanitize --input data.jsonl --output clean.jsonl --quality-scorer perplexity \
     --quality-model distilgpt2 --quality-min-score 0.4
+
+# Full pipeline with an HTML audit report artifact
+sanitize --input data.jsonl --output clean.jsonl --remove-pii --deduplicate \
+    --quality-min-score 0.5 --report audit.html
 ```
 
 ### NER-backed PII install

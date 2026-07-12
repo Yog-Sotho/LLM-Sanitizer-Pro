@@ -113,17 +113,21 @@ def redact_pii(
     mask: bool = False,
     extra_patterns: Optional[List[Tuple[re.Pattern[str], str, str]]] = None,
     pseudo_registry: Optional[PseudoRegistry] = None,
+    counters: Optional[Dict[str, int]] = None,
 ) -> str:
-    """Redact, mask, or pseudonymize PII."""
+    """Redact, mask, or pseudonymize PII. When `counters` is given, tallies
+    the number of substitutions per PII kind into it."""
     for pattern, token, kind in (_PII_PATTERNS + (extra_patterns or [])):
         if pseudo_registry is not None:
             def _sub_pseudo(m: re.Match[str], _k: str = kind, _r: PseudoRegistry = pseudo_registry) -> str:
                 return _r.get_or_create(m.group(0), _k)
-            text = pattern.sub(_sub_pseudo, text)
+            text, n = pattern.subn(_sub_pseudo, text)
         elif mask and kind in _MASK_FN:
-            text = pattern.sub(_MASK_FN[kind], text)
+            text, n = pattern.subn(_MASK_FN[kind], text)
         else:
-            text = pattern.sub(token, text)
+            text, n = pattern.subn(token, text)
+        if n and counters is not None:
+            counters[kind] = counters.get(kind, 0) + n
     return text
 
 def clean_text(text: str, remove_html: bool = True) -> str:

@@ -146,6 +146,8 @@ class Sanitizer:
         self.config.validate()
         c = self.config
         self.stats = RunStats()
+        from sanitizer_pro.report import AuditSampleCollector
+        self.audit_samples = AuditSampleCollector()
         self._args = _ArgsView(c)
 
         self._lang_filter = {x.lower() for x in c.lang_filter} if c.lang_filter else None
@@ -208,12 +210,17 @@ class Sanitizer:
             self.stats.malformed += 1
             return ProcessResult(None, False, 'malformed')
 
+        pii_before = sum(self.stats.pii_counts.values())
         sanitized, freason, quality_text, lang = sanitize_record(
             record, self._args, text_fields=c.text_fields,
             extra_pii_patterns=c.extra_pii_patterns, lang_filter=self._lang_filter,
             field_ops=c.field_ops, truncator=self._truncator,
             pseudo_registry=self.pseudo_registry, require_fields=c.require_fields,
-            quality_fn=None, ner_redactor=self._ner)
+            quality_fn=None, ner_redactor=self._ner,
+            pii_counters=self.stats.pii_counts)
+        if (sanitized is not None and self.audit_samples.wants_pii_diffs
+                and sum(self.stats.pii_counts.values()) > pii_before):
+            self.audit_samples.add_pii_diff(record, sanitized)
 
         if sanitized is None:
             if freason == FilterReason.LANGUAGE:
@@ -226,7 +233,9 @@ class Sanitizer:
                 self.stats.filtered_profanity += 1
             else:
                 self.stats.filtered_quality += 1
-            return ProcessResult(None, False, (freason or FilterReason.QUALITY).value)
+            reason = (freason or FilterReason.QUALITY).value
+            self.audit_samples.add_dropped(reason, record)
+            return ProcessResult(None, False, reason)
 
         if self._chat_validator is not None:
             chat_reason = self._chat_validator.check(sanitized)
@@ -234,10 +243,12 @@ class Sanitizer:
                 self.stats.filtered_chat += 1
                 self.stats.chat_invalid_reasons[chat_reason] = \
                     self.stats.chat_invalid_reasons.get(chat_reason, 0) + 1
+                self.audit_samples.add_dropped('chat', sanitized)
                 return ProcessResult(None, False, f'chat:{chat_reason}')
 
         if self._contamination is not None and self._contamination.is_contaminated(quality_text):
             self.stats.filtered_contaminated += 1
+            self.audit_samples.add_dropped('contaminated', sanitized)
             return ProcessResult(None, False, 'contaminated')
 
         score: Optional[float] = None
@@ -245,6 +256,7 @@ class Sanitizer:
             score = self._scorer.score(quality_text)
             if c.quality_min_score is not None and score < c.quality_min_score:
                 self.stats.filtered_low_score += 1
+                self.audit_samples.add_dropped('low_score', sanitized)
                 return ProcessResult(None, False, 'low_score', score=score)
 
         if self._deduper is not None:
@@ -297,6 +309,14 @@ class Sanitizer:
                 yield self._emit(sanitized, quality_text, lang, score)
 
     # -- lifecycle ------------------------------------------------------------
+
+    def report_html(self, meta: Optional[Dict[str, Any]] = None) -> str:
+        """Render the HTML audit report for everything processed so far."""
+        from sanitizer_pro.report import generate_report_html
+        return generate_report_html(self.stats.to_dict(), self.audit_samples, meta)
+
+    def write_report(self, path: str, meta: Optional[Dict[str, Any]] = None) -> None:
+        Path(path).write_text(self.report_html(meta), encoding='utf-8')
 
     def export_pseudonym_map(self, path: str) -> None:
         if self.pseudo_registry is None:

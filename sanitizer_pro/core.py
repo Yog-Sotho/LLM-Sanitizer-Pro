@@ -37,27 +37,28 @@ def _sanitize_value(
     v: Any, *, remove_html: bool, remove_pii: bool, pii_mask: bool,
     extra_pii: Optional[List], pseudo_registry: Optional[PseudoRegistry],
     field_pii_only: bool, field_no_clean: bool, max_depth: int,
-    truncator: Optional[TokenTruncator], ner_redactor: Optional[Any] = None, _depth: int = 0
+    truncator: Optional[TokenTruncator], ner_redactor: Optional[Any] = None,
+    pii_counters: Optional[Dict[str, int]] = None, _depth: int = 0
 ) -> Any:
     if _depth > max_depth: return v
     kw = dict(remove_html=remove_html, remove_pii=remove_pii, pii_mask=pii_mask,
               extra_pii=extra_pii, pseudo_registry=pseudo_registry,
               field_pii_only=field_pii_only, field_no_clean=field_no_clean,
               max_depth=max_depth, truncator=truncator, ner_redactor=ner_redactor,
-              _depth=_depth + 1)
+              pii_counters=pii_counters, _depth=_depth + 1)
 
     if isinstance(v, str):
         if field_no_clean: return v
         if field_pii_only:
             if not remove_pii: return v
             # NER runs first: the model should see natural text, not [PII_*] tokens.
-            if ner_redactor: v = ner_redactor.redact(v, mask=pii_mask, pseudo_registry=pseudo_registry)
-            return redact_pii(v, mask=pii_mask, extra_patterns=extra_pii, pseudo_registry=pseudo_registry)
+            if ner_redactor: v = ner_redactor.redact(v, mask=pii_mask, pseudo_registry=pseudo_registry, counters=pii_counters)
+            return redact_pii(v, mask=pii_mask, extra_patterns=extra_pii, pseudo_registry=pseudo_registry, counters=pii_counters)
         cleaned = clean_text(v, remove_html)
         if remove_pii:
             if ner_redactor:
-                cleaned = ner_redactor.redact(cleaned, mask=pii_mask, pseudo_registry=pseudo_registry)
-            cleaned = redact_pii(cleaned, mask=pii_mask, extra_patterns=extra_pii, pseudo_registry=pseudo_registry)
+                cleaned = ner_redactor.redact(cleaned, mask=pii_mask, pseudo_registry=pseudo_registry, counters=pii_counters)
+            cleaned = redact_pii(cleaned, mask=pii_mask, extra_patterns=extra_pii, pseudo_registry=pseudo_registry, counters=pii_counters)
         if truncator: cleaned = truncator.truncate(cleaned)
         return cleaned
     if isinstance(v, dict): return {k: _sanitize_value(val, **kw) for k, val in v.items()}
@@ -69,7 +70,8 @@ def sanitize_record(
     extra_pii_patterns: Optional[List] = None, lang_filter: Optional[Set[str]] = None,
     field_ops: Optional[FieldOps] = None, truncator: Optional[TokenTruncator] = None,
     pseudo_registry: Optional[PseudoRegistry] = None, require_fields: Optional[List[str]] = None,
-    quality_fn: Optional[Callable] = None, ner_redactor: Optional[Any] = None
+    quality_fn: Optional[Callable] = None, ner_redactor: Optional[Any] = None,
+    pii_counters: Optional[Dict[str, int]] = None
 ) -> Tuple[Optional[Dict[str, Any]], Optional[FilterReason], str, Optional[str]]:
     if not isinstance(record, dict):
         return None, FilterReason.QUALITY, '', None
@@ -84,7 +86,7 @@ def sanitize_record(
             extra_pii=extra_pii_patterns, pseudo_registry=pseudo_registry,
             field_pii_only=(fname in pii_only), field_no_clean=(fname in no_clean),
             max_depth=getattr(args, 'max_depth', _MAX_DEPTH_DEFAULT), truncator=truncator,
-            ner_redactor=ner_redactor
+            ner_redactor=ner_redactor, pii_counters=pii_counters
         ) for fname, val in record.items()
     }
 
