@@ -5,6 +5,7 @@ Production-grade, modular dataset sanitization, PII redaction, and curation pipe
 ## 🚀 Features
 
 - **Multi-Format Streaming**: JSONL, JSON (ijson streaming), CSV/TSV, TXT, Parquet, Excel, and gzip variants — from files or stdin/stdout.
+- **Hugging Face Hub Input** (`--input hf://owner/dataset[/config[/split]]`): sanitize a Hub dataset directly — shards are fetched via the Hub's parquet API (only `pyarrow` needed, no `datasets` library), cached locally, and streamed through the pipeline. Set `HF_TOKEN` for private/gated datasets.
 - **Advanced PII Redaction**: Email, URL, phone, credit card, SSN, and IP detection with three modes: token replacement, partial masking (`--pii-mask`), and stable pseudonymization (`--pii-pseudonymize` + exportable mapping).
 - **NER-Backed PII Detection** (`--pii-ner`): person names, locations, and organizations detected with a named-entity model (spaCy or transformers) — the PII that regexes fundamentally cannot catch. All three redaction modes apply ("Sarah Connor" → `[PII_PERSON]`, `S*** C***`, or a stable `Person_0001`).
 - **High-Performance Deduplication**:
@@ -85,6 +86,10 @@ sanitize --input data.jsonl --output clean.jsonl --quality-scorer perplexity \
 # Full pipeline with an HTML audit report artifact
 sanitize --input data.jsonl --output clean.jsonl --remove-pii --deduplicate \
     --quality-min-score 0.5 --report audit.html
+
+# Sanitize a Hugging Face Hub dataset directly (cached under ~/.cache)
+sanitize --input hf://openai/gsm8k/main/train --output clean.jsonl \
+    --remove-pii --deduplicate --report audit.html
 ```
 
 ### NER-backed PII install

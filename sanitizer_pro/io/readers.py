@@ -32,8 +32,14 @@ def read_records(
     input_path: str, encoding: str = 'utf-8', paragraph_mode: bool = False,
     csv_delimiter: Optional[str] = None, csv_no_header: bool = False,
     csv_columns: Optional[List[str]] = None, excel_sheet: Any = 0,
-    excel_warn_mb: float = 100, input_format: Optional[str] = None, json_path: str = 'item'
+    excel_warn_mb: float = 100, input_format: Optional[str] = None, json_path: str = 'item',
+    hf_cache: Optional[str] = None
 ) -> Iterator[Dict[str, Any]]:
+    if input_path.startswith('hf://'):
+        from sanitizer_pro.hub import iter_hub_records
+        yield from iter_hub_records(input_path, cache_dir=hf_cache)
+        return
+
     fmt = input_format or Path(input_path).suffix.lower()
     if fmt not in SUPPORTED_INPUT_FORMATS:
         raise InputFormatError(

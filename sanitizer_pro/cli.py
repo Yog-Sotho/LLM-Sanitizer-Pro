@@ -244,6 +244,9 @@ def build_parser() -> argparse.ArgumentParser:
     io_g.add_argument('--encoding', default='utf-8')
     io_g.add_argument('--shard-size', type=int, default=None, metavar='N')
     io_g.add_argument('--json-path', default='item', metavar='PATH')
+    io_g.add_argument('--hf-cache', default=None, metavar='DIR',
+                      help='Cache dir for hf:// dataset downloads '
+                           '(default ~/.cache/llm-sanitizer-pro/datasets).')
 
     # Runtime
     rt = parser.add_argument_group('Runtime')
@@ -370,9 +373,18 @@ def main() -> None:
         except ConfigurationError as exc:
             logging.error(str(exc)); sys.exit(1)
 
-    input_fmt = resolve_fmt(args.input, args.input_format)
-    if not input_fmt:
-        logging.error("Cannot detect input format. Supply --input-format."); sys.exit(1)
+    is_hub_input = str(args.input).startswith('hf://')
+    if is_hub_input:
+        from sanitizer_pro.hub import parse_hf_uri
+        try:
+            parse_hf_uri(args.input)  # fail fast on malformed URIs
+        except ConfigurationError as exc:
+            logging.error(str(exc)); sys.exit(1)
+        input_fmt = 'hf'
+    else:
+        input_fmt = resolve_fmt(args.input, args.input_format)
+        if not input_fmt:
+            logging.error("Cannot detect input format. Supply --input-format."); sys.exit(1)
 
     excel_sheet: Any = 0
     if input_fmt in {'.xlsx', '.xls'}:
@@ -381,7 +393,7 @@ def main() -> None:
         except ConfigurationError as exc:
             logging.error(str(exc)); sys.exit(1)
 
-    if args.input != _STDIN and not os.path.exists(args.input):
+    if args.input != _STDIN and not is_hub_input and not os.path.exists(args.input):
         logging.error(f"Input file not found: {args.input}"); sys.exit(1)
 
     if args.output not in {_STDOUT, '/dev/null'}:
@@ -391,7 +403,7 @@ def main() -> None:
     output_fmt = resolve_fmt(args.output, args.output_format)
     if not output_fmt:
         if no_output_early or args.output == '/dev/null':
-            output_fmt = input_fmt or '.jsonl'
+            output_fmt = input_fmt if input_fmt not in ('', 'hf') else '.jsonl'
         else:
             logging.error("Cannot detect output format. Supply --output-format."); sys.exit(1)
 
@@ -474,7 +486,9 @@ def main() -> None:
             args.input, encoding=args.encoding, paragraph_mode=args.paragraph_mode,
             csv_delimiter=args.csv_delimiter, csv_no_header=args.csv_no_header,
             csv_columns=args.csv_columns_list, excel_sheet=excel_sheet,
-            excel_warn_mb=args.excel_warn_size, input_format=input_fmt, json_path=args.json_path
+            excel_warn_mb=args.excel_warn_size,
+            input_format=None if is_hub_input else input_fmt,
+            json_path=args.json_path, hf_cache=args.hf_cache
         )
     except Exception as exc:
         logging.critical(f"Failed to open input: {exc}"); sys.exit(1)
