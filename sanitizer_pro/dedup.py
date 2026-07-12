@@ -140,8 +140,87 @@ class MinHashDeduper:
         pass
 
 
+class SemanticDeduper:
+    """Embedding-based near-duplicate detection: catches paraphrases that share
+    no n-grams. Static embeddings (model2vec, no torch) + random-hyperplane LSH
+    for candidate lookup, verified with exact cosine similarity — so there are
+    no false positives beyond the threshold itself."""
+
+    _NUM_BITS = 64
+    _BAND_BITS = 8
+
+    def __init__(self, threshold: float = 0.9, model: str = 'minishlab/potion-base-8M',
+                 _embed_fn=None) -> None:
+        try:
+            import numpy as np
+        except ImportError:
+            raise ImportError("Semantic dedup requires: pip install model2vec") from None
+        self._np = np
+        self.threshold = threshold
+        if _embed_fn is not None:
+            self._embed_raw = _embed_fn
+        else:
+            try:
+                from model2vec import StaticModel
+            except ImportError:
+                raise ImportError("Semantic dedup requires: pip install model2vec") from None
+            m = StaticModel.from_pretrained(model)
+            self._embed_raw = lambda text: m.encode([text])[0]
+        self._planes = None  # lazily sized to the embedding dim
+        self._vectors: List = []
+        self._buckets: dict = {}
+        self._last: Optional[tuple] = None  # (text, vector, signature) cache
+
+    def _embed(self, text: str):
+        if self._last is not None and self._last[0] == text:
+            return self._last[1], self._last[2]
+        np = self._np
+        v = np.asarray(self._embed_raw(text), dtype=np.float32)
+        norm = float(np.linalg.norm(v))
+        if norm > 0:
+            v = v / norm
+        if self._planes is None:
+            self._planes = np.random.RandomState(0).randn(v.shape[0], self._NUM_BITS)
+        bits = (v @ self._planes) > 0
+        sig = int(np.packbits(bits).tobytes().hex(), 16)
+        self._last = (text, v, sig)
+        return v, sig
+
+    def _bands(self, sig: int):
+        for band in range(self._NUM_BITS // self._BAND_BITS):
+            yield band, (sig >> (band * self._BAND_BITS)) & ((1 << self._BAND_BITS) - 1)
+
+    def contains(self, text: str) -> bool:
+        if not self._vectors:
+            self._embed(text)  # warm the cache for the add() that may follow
+            return False
+        v, sig = self._embed(text)
+        candidates = set()
+        for key in self._bands(sig):
+            candidates.update(self._buckets.get(key, ()))
+        for idx in candidates:
+            if float(v @ self._vectors[idx]) >= self.threshold:
+                return True
+        return False
+
+    def add(self, text: str) -> None:
+        v, sig = self._embed(text)
+        idx = len(self._vectors)
+        self._vectors.append(v)
+        for key in self._bands(sig):
+            self._buckets.setdefault(key, []).append(idx)
+
+    def close(self) -> None:
+        self._vectors.clear()
+        self._buckets.clear()
+
+
 def make_deduper(backend: str, db_path: Optional[str] = None, fuzzy: bool = False,
-                 fuzzy_threshold: float = 0.8):
+                 fuzzy_threshold: float = 0.8, semantic: bool = False,
+                 semantic_threshold: float = 0.9,
+                 semantic_model: str = 'minishlab/potion-base-8M'):
+    if semantic:
+        return SemanticDeduper(threshold=semantic_threshold, model=semantic_model)
     if fuzzy:
         return MinHashDeduper(threshold=fuzzy_threshold)
     return SQLiteDeduper(db_path=db_path) if backend == 'sqlite' else MemoryDeduper()

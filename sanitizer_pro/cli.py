@@ -169,6 +169,13 @@ def build_parser() -> argparse.ArgumentParser:
     fg.add_argument('--fuzzy-dedup', action='store_true', help='Use MinHash+LSH for near-duplicate detection.')
     fg.add_argument('--fuzzy-threshold', type=float, default=0.8, metavar='T',
                     help='Jaccard similarity threshold for --fuzzy-dedup (0-1, default 0.8).')
+    fg.add_argument('--semantic-dedup', action='store_true',
+                    help='Embedding-based near-dedup: drops paraphrases that share no '
+                         'n-grams (pip install model2vec; ~30MB model, no torch).')
+    fg.add_argument('--semantic-threshold', type=float, default=0.9, metavar='T',
+                    help='Cosine similarity threshold for --semantic-dedup (default 0.9).')
+    fg.add_argument('--semantic-model', default='minishlab/potion-base-8M', metavar='NAME',
+                    help='model2vec static embedding model for --semantic-dedup.')
     fg.add_argument('--dedup-fields', default='')
     fg.add_argument('--dedup-normalize', action='store_true')
     fg.add_argument('--dedup-backend', default='memory', choices=['memory', 'sqlite'])
@@ -359,6 +366,11 @@ def main() -> None:
         logging.error("--shard-size must be >= 1."); sys.exit(1)
     if not (0 < args.fuzzy_threshold <= 1):
         logging.error("--fuzzy-threshold must be in (0, 1]."); sys.exit(1)
+    if not (0 < args.semantic_threshold <= 1):
+        logging.error("--semantic-threshold must be in (0, 1]."); sys.exit(1)
+    if args.semantic_dedup and args.fuzzy_dedup:
+        logging.error("--semantic-dedup and --fuzzy-dedup are mutually exclusive "
+                      "(both compare quality text; pick one)."); sys.exit(1)
     if args.quality_min_score is not None and not (0 <= args.quality_min_score <= 1):
         logging.error("--quality-min-score must be in [0, 1]."); sys.exit(1)
     if args.keep_top_percent is not None and not (0 < args.keep_top_percent <= 100):
@@ -515,8 +527,11 @@ def main() -> None:
 
     no_output = args.dry_run or args.stats_only
     try:
-        deduper = make_deduper(args.dedup_backend, args.dedup_db_path, fuzzy=args.fuzzy_dedup,
-                               fuzzy_threshold=args.fuzzy_threshold) if (args.deduplicate or args.fuzzy_dedup) else None
+        deduper = make_deduper(
+            args.dedup_backend, args.dedup_db_path, fuzzy=args.fuzzy_dedup,
+            fuzzy_threshold=args.fuzzy_threshold, semantic=args.semantic_dedup,
+            semantic_threshold=args.semantic_threshold, semantic_model=args.semantic_model,
+        ) if (args.deduplicate or args.fuzzy_dedup or args.semantic_dedup) else None
     except ImportError as exc:
         logging.error(str(exc)); sys.exit(1)
     run_stats = RunStats.from_state(resume_stats) if resume_stats else RunStats()
@@ -608,7 +623,7 @@ def main() -> None:
             return
 
         if deduper is not None:
-            if args.fuzzy_dedup:
+            if args.fuzzy_dedup or args.semantic_dedup:
                 if deduper.contains(quality_text):
                     run_stats.deduplicated += 1
                     return
