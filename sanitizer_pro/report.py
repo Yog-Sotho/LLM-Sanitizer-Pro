@@ -30,6 +30,12 @@ _PII_LABELS = {
     'email': 'Email addresses', 'phone': 'Phone numbers', 'card': 'Card numbers',
     'ssn': 'SSNs', 'ip': 'IP addresses', 'url': 'URLs', 'custom': 'Custom patterns',
     'person': 'Person names (NER)', 'location': 'Locations (NER)', 'org': 'Organizations (NER)',
+    'private_key': 'Private keys', 'aws_access_key': 'AWS access keys',
+    'github_token': 'GitHub tokens', 'openai_key': 'OpenAI keys',
+    'anthropic_key': 'Anthropic keys', 'google_api_key': 'Google API keys',
+    'slack_token': 'Slack tokens', 'stripe_key': 'Stripe keys', 'twilio_key': 'Twilio keys',
+    'sendgrid_key': 'SendGrid keys', 'jwt': 'JWTs', 'bearer_token': 'Bearer tokens',
+    'connection_string': 'Connection strings', 'generic_secret': 'Generic secrets',
 }
 
 

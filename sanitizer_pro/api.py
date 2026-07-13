@@ -40,6 +40,7 @@ class SanitizerConfig:
     pii_ner_backend: str = 'auto'
     pii_ner_entities: Tuple[str, ...] = ('person',)
     pii_ner_model: Optional[str] = None
+    redact_secrets: bool = False
     extra_pii_patterns: Optional[List] = None   # (compiled_regex, token, kind) triples
 
     # Quality gates

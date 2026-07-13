@@ -130,6 +130,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument('--output-format', default=None, metavar='FMT', help="Override output format.")
     parser.add_argument('--config', default=None, metavar='PATH', help="YAML or JSON config file.")
     parser.add_argument('--generate-config', default=None, const='yaml', nargs='?', choices=['yaml', 'json'], metavar='FMT', help="Print config template and exit.")
+    parser.add_argument('--profile', default=None, metavar='NAME',
+                        help="Apply a preset flag bundle: fine-tune, pretrain, rag "
+                             "(or 'list' to show them). Explicit flags and --config override it.")
 
     # Quality Filters
     qg = parser.add_argument_group('Quality Filters')
@@ -193,6 +196,10 @@ def build_parser() -> argparse.ArgumentParser:
                     help='Comma-separated entity kinds to redact: person,location,org (default: person).')
     fg.add_argument('--pii-ner-model', default=None, metavar='NAME',
                     help='Override the NER model (spaCy model name or HF model id).')
+    fg.add_argument('--redact-secrets', action='store_true',
+                    help='Detect and redact credentials — API keys, tokens, private keys, '
+                         'connection strings. Works with or without --remove-pii; honors '
+                         '--pii-mask / --pii-pseudonymize.')
     fg.add_argument('--clean-html', action='store_true')
     fg.add_argument('--paragraph-mode', action='store_true')
     fg.add_argument('--txt-fallback-field', default=None, metavar='FIELD')
@@ -258,6 +265,9 @@ def build_parser() -> argparse.ArgumentParser:
     # Runtime
     rt = parser.add_argument_group('Runtime')
     rt.add_argument('--log-level', default='INFO', choices=['DEBUG', 'INFO', 'WARNING', 'ERROR'])
+    rt.add_argument('--log-format', default='text', choices=['text', 'json'],
+                    help="Log line format on stderr: human text or JSON lines "
+                         "(for structured ingestion). Default: text.")
     rt.add_argument('--quiet', action='store_true')
     rt.add_argument('--no-progress', action='store_true')
     rt.add_argument('--jobs', type=int, default=1)
@@ -307,10 +317,27 @@ def main() -> None:
             print(f"{name:<12} {spec.repo:<40} {spec.note}")
         sys.exit(0)
 
+    if args.profile is not None:
+        from sanitizer_pro.profiles import PROFILE_NAMES, describe_profiles
+        if args.profile.strip().lower() == 'list':
+            print(describe_profiles())
+            sys.exit(0)
+        if args.profile not in PROFILE_NAMES:
+            parser.error(f"--profile must be one of {list(PROFILE_NAMES)} or 'list' "
+                         f"(got '{args.profile}').")
+
     if args.input is None or args.output is None:
         parser.error("--input and --output are required.")
 
     explicit_args = collect_explicit_args(parser)
+
+    # Precedence: explicit CLI flags > --config > --profile > defaults.
+    if args.profile:
+        from sanitizer_pro.profiles import profile_settings
+        for dest, val in profile_settings(args.profile).items():
+            if dest not in explicit_args:
+                setattr(args, dest, val)
+
     if args.config:
         try:
             cfg = load_config_file(args.config)
@@ -342,14 +369,16 @@ def main() -> None:
         random.seed(args.seed)
 
     eff_level = 'WARNING' if args.quiet else args.log_level
-    logging.basicConfig(
-        level=getattr(logging, eff_level),
-        format='%(asctime)s | %(levelname)s | %(message)s',
-        handlers=[logging.StreamHandler(sys.stderr)],
-        force=True
-    )
+    handler = logging.StreamHandler(sys.stderr)
+    if args.log_format == 'json':
+        from sanitizer_pro.logutil import JsonLogFormatter
+        handler.setFormatter(JsonLogFormatter())
+    else:
+        handler.setFormatter(logging.Formatter('%(asctime)s | %(levelname)s | %(message)s'))
+    logging.basicConfig(level=getattr(logging, eff_level), handlers=[handler], force=True)
 
-    if not args.quiet and eff_level in {'DEBUG', 'INFO'} and args.output != _STDOUT:
+    if (args.log_format != 'json' and not args.quiet
+            and eff_level in {'DEBUG', 'INFO'} and args.output != _STDOUT):
         print(BANNER, file=sys.stderr)
 
     # Validation
@@ -806,7 +835,11 @@ def main() -> None:
         top = ', '.join(f"{k}={v}" for k, v in sorted(
             run_stats.chat_invalid_reasons.items(), key=lambda x: -x[1])[:5])
         lines.insert(-1, f"  chat-invalid breakdown: {top}")
-    print('\n'.join(lines), file=sys.stderr)
+    if args.log_format == 'json':
+        # Keep stderr a clean JSON-lines stream: emit the summary as one record.
+        print(json.dumps({'event': 'complete', **run_stats.to_dict()}), file=sys.stderr)
+    else:
+        print('\n'.join(lines), file=sys.stderr)
 
     if args.stats_file:
         try:
@@ -818,9 +851,11 @@ def main() -> None:
         from sanitizer_pro.report import generate_report_html
         features = [name for enabled, name in [
             (args.remove_pii, 'PII redaction' + (' + NER' if args.pii_ner else '')),
+            (args.redact_secrets, 'secrets redaction'),
             (args.pii_pseudonymize, 'pseudonymization'),
             (args.deduplicate, f'exact dedup ({args.dedup_backend})'),
             (args.fuzzy_dedup, f'fuzzy dedup (t={args.fuzzy_threshold})'),
+            (args.semantic_dedup, f'semantic dedup (t={args.semantic_threshold})'),
             (bool(args.decontaminate or args.decontam_refs),
              'decontamination' + (f' ({args.decontaminate})' if args.decontaminate else '')),
             (args.validate_chat, 'chat validation'),
@@ -831,6 +866,7 @@ def main() -> None:
         meta = {
             'Input': f"{args.input} ({input_fmt})",
             'Output': f"{args.output} ({output_fmt}){mode_tag}",
+            'Profile': args.profile or '—',
             'Active features': ', '.join(features) or 'none',
             'Duration': f"{time.monotonic() - run_started:.1f}s | jobs={args.jobs}",
             'version': '3.0',
