@@ -66,6 +66,9 @@ class SanitizerConfig:
     deduplicate: bool = False
     fuzzy_dedup: bool = False
     fuzzy_threshold: float = 0.8
+    semantic_dedup: bool = False
+    semantic_threshold: float = 0.9
+    semantic_model: str = 'minishlab/potion-base-8M'
     dedup_backend: str = 'memory'
     dedup_db_path: Optional[str] = None
     dedup_fields: Optional[List[str]] = None
@@ -107,6 +110,10 @@ class SanitizerConfig:
             raise ConfigurationError("keep_top_percent must be in (0, 100].")
         if not (0 < self.fuzzy_threshold <= 1):
             raise ConfigurationError("fuzzy_threshold must be in (0, 1].")
+        if not (0 < self.semantic_threshold <= 1):
+            raise ConfigurationError("semantic_threshold must be in (0, 1].")
+        if self.semantic_dedup and self.fuzzy_dedup:
+            raise ConfigurationError("semantic_dedup and fuzzy_dedup are mutually exclusive.")
         if self.lang_filter:
             from sanitizer_pro.quality import LANGDETECT_AVAILABLE
             if not LANGDETECT_AVAILABLE:
@@ -161,9 +168,11 @@ class Sanitizer:
                                     model=c.pii_ner_model)
 
         self._deduper = None
-        if c.deduplicate or c.fuzzy_dedup:
-            self._deduper = make_deduper(c.dedup_backend, c.dedup_db_path,
-                                         fuzzy=c.fuzzy_dedup, fuzzy_threshold=c.fuzzy_threshold)
+        if c.deduplicate or c.fuzzy_dedup or c.semantic_dedup:
+            self._deduper = make_deduper(
+                c.dedup_backend, c.dedup_db_path, fuzzy=c.fuzzy_dedup,
+                fuzzy_threshold=c.fuzzy_threshold, semantic=c.semantic_dedup,
+                semantic_threshold=c.semantic_threshold, semantic_model=c.semantic_model)
 
         self._contamination = None
         if c.decontaminate or c.decontam_refs:
@@ -260,7 +269,7 @@ class Sanitizer:
                 return ProcessResult(None, False, 'low_score', score=score)
 
         if self._deduper is not None:
-            key = quality_text if c.fuzzy_dedup else \
+            key = quality_text if (c.fuzzy_dedup or c.semantic_dedup) else \
                 get_record_hash(sanitized, c.dedup_fields, c.dedup_normalize)
             if self._deduper.contains(key):
                 self.stats.deduplicated += 1

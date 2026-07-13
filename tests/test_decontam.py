@@ -5,7 +5,7 @@ import pytest
 
 from sanitizer_pro.decontam import (
     KNOWN_BENCHMARKS, NGramIndex, build_index, iter_reference_file_texts,
-    normalize_for_ngrams, resolve_benchmark_names, select_parquet_urls,
+    normalize_for_ngrams, resolve_benchmark_names,
 )
 from sanitizer_pro.utils import ConfigurationError
 
@@ -96,13 +96,6 @@ class TestBenchmarkRegistry:
         with pytest.raises(ConfigurationError, match="Unknown benchmark"):
             resolve_benchmark_names("mmlu,nosuchbench")
 
-    def test_select_parquet_urls(self):
-        api = {"main": {"test": ["u1", "u2"], "train": ["u3"]}}
-        assert select_parquet_urls(api, (("main", "test"),), "x/y") == ["u1", "u2"]
-
-    def test_select_parquet_urls_missing_split(self):
-        with pytest.raises(ConfigurationError, match="no parquet"):
-            select_parquet_urls({"main": {"train": ["u"]}}, (("main", "test"),), "x/y")
 
 
 class TestReferenceFiles:

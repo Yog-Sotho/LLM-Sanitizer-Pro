@@ -7,5 +7,6 @@ Library entry points::
 __version__ = "3.0.0"
 
 from sanitizer_pro.api import ProcessResult, Sanitizer, SanitizerConfig  # noqa: E402,F401
+from sanitizer_pro.hub import iter_hub_records  # noqa: E402,F401
 
-__all__ = ['Sanitizer', 'SanitizerConfig', 'ProcessResult', '__version__']
+__all__ = ['Sanitizer', 'SanitizerConfig', 'ProcessResult', 'iter_hub_records', '__version__']

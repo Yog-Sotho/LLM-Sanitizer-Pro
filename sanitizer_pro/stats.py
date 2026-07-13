@@ -53,6 +53,22 @@ class RunStats:
         self.score_sum += score
         self.score_count += 1
 
+    def to_state(self) -> Dict[str, Any]:
+        """Serializable snapshot for checkpointing (exact attribute round-trip)."""
+        return {k: v for k, v in vars(self).items()}
+
+    @classmethod
+    def from_state(cls, state: Dict[str, Any]) -> 'RunStats':
+        rs = cls()
+        for k, v in state.items():
+            if not hasattr(rs, k):
+                continue
+            # JSON turns int histogram keys into strings; convert them back.
+            if k in ('char_hist', 'word_hist', 'score_hist') and isinstance(v, dict):
+                v = {int(bk): bv for bk, bv in v.items()}
+            setattr(rs, k, v)
+        return rs
+
     def to_dict(self) -> Dict[str, Any]:
         total = self.total or 1
         return {

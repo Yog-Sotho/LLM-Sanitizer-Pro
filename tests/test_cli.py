@@ -315,3 +315,31 @@ def test_html_report_with_parallel_jobs(tmp_path):
     html = report.read_text()
     # PII counts are aggregated from workers even in parallel mode
     assert 'Email addresses' in html and '>20<' in html.replace(',', '')
+
+
+def _pyarrow_available() -> bool:
+    try:
+        import pyarrow  # noqa: F401
+        return True
+    except ImportError:
+        return False
+
+
+def test_hf_input_invalid_uri(tmp_path):
+    r = run_cli('--input', 'hf://justanowner', '--output', str(tmp_path / 'o.jsonl'))
+    assert r.returncode == 1
+    assert 'Invalid Hub URI' in r.stderr
+
+
+@pytest.mark.skipif(not _pyarrow_available(), reason="pyarrow not installed")
+def test_hf_input_end_to_end(tmp_path):
+    """Live: stream GSM8K's test split from the Hub through the full pipeline."""
+    out = tmp_path / "out.jsonl"
+    r = run_cli('--input', 'hf://openai/gsm8k/main/test', '--output', str(out),
+                '--min-chars', '20', '--min-words', '5', '--min-unique-ratio', '0',
+                '--no-progress', '--quiet')
+    assert r.returncode == 0, r.stderr
+    lines = out.read_text().splitlines()
+    assert len(lines) > 1000  # gsm8k test has 1319 rows
+    rec = json.loads(lines[0])
+    assert 'question' in rec and 'answer' in rec

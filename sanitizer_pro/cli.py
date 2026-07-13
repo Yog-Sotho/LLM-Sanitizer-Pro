@@ -169,6 +169,13 @@ def build_parser() -> argparse.ArgumentParser:
     fg.add_argument('--fuzzy-dedup', action='store_true', help='Use MinHash+LSH for near-duplicate detection.')
     fg.add_argument('--fuzzy-threshold', type=float, default=0.8, metavar='T',
                     help='Jaccard similarity threshold for --fuzzy-dedup (0-1, default 0.8).')
+    fg.add_argument('--semantic-dedup', action='store_true',
+                    help='Embedding-based near-dedup: drops paraphrases that share no '
+                         'n-grams (pip install model2vec; ~30MB model, no torch).')
+    fg.add_argument('--semantic-threshold', type=float, default=0.9, metavar='T',
+                    help='Cosine similarity threshold for --semantic-dedup (default 0.9).')
+    fg.add_argument('--semantic-model', default='minishlab/potion-base-8M', metavar='NAME',
+                    help='model2vec static embedding model for --semantic-dedup.')
     fg.add_argument('--dedup-fields', default='')
     fg.add_argument('--dedup-normalize', action='store_true')
     fg.add_argument('--dedup-backend', default='memory', choices=['memory', 'sqlite'])
@@ -244,6 +251,9 @@ def build_parser() -> argparse.ArgumentParser:
     io_g.add_argument('--encoding', default='utf-8')
     io_g.add_argument('--shard-size', type=int, default=None, metavar='N')
     io_g.add_argument('--json-path', default='item', metavar='PATH')
+    io_g.add_argument('--hf-cache', default=None, metavar='DIR',
+                      help='Cache dir for hf:// dataset downloads '
+                           '(default ~/.cache/llm-sanitizer-pro/datasets).')
 
     # Runtime
     rt = parser.add_argument_group('Runtime')
@@ -260,6 +270,12 @@ def build_parser() -> argparse.ArgumentParser:
     rt.add_argument('--report', default=None, metavar='PATH',
                     help='Write a self-contained HTML audit report (removal funnel, PII '
                          'counts by type, sample diffs) to PATH.')
+    rt.add_argument('--resume', action='store_true',
+                    help='Checkpoint progress to <output>.checkpoint.json and, when a '
+                         'checkpoint exists, continue the run from where it stopped '
+                         '(jsonl/txt/csv outputs, --jobs 1).')
+    rt.add_argument('--checkpoint-interval', type=int, default=10_000, metavar='N',
+                    help='Write a checkpoint every N input records (default 10000).')
 
     return parser
 
@@ -350,6 +366,11 @@ def main() -> None:
         logging.error("--shard-size must be >= 1."); sys.exit(1)
     if not (0 < args.fuzzy_threshold <= 1):
         logging.error("--fuzzy-threshold must be in (0, 1]."); sys.exit(1)
+    if not (0 < args.semantic_threshold <= 1):
+        logging.error("--semantic-threshold must be in (0, 1]."); sys.exit(1)
+    if args.semantic_dedup and args.fuzzy_dedup:
+        logging.error("--semantic-dedup and --fuzzy-dedup are mutually exclusive "
+                      "(both compare quality text; pick one)."); sys.exit(1)
     if args.quality_min_score is not None and not (0 <= args.quality_min_score <= 1):
         logging.error("--quality-min-score must be in [0, 1]."); sys.exit(1)
     if args.keep_top_percent is not None and not (0 < args.keep_top_percent <= 100):
@@ -370,9 +391,18 @@ def main() -> None:
         except ConfigurationError as exc:
             logging.error(str(exc)); sys.exit(1)
 
-    input_fmt = resolve_fmt(args.input, args.input_format)
-    if not input_fmt:
-        logging.error("Cannot detect input format. Supply --input-format."); sys.exit(1)
+    is_hub_input = str(args.input).startswith('hf://')
+    if is_hub_input:
+        from sanitizer_pro.hub import parse_hf_uri
+        try:
+            parse_hf_uri(args.input)  # fail fast on malformed URIs
+        except ConfigurationError as exc:
+            logging.error(str(exc)); sys.exit(1)
+        input_fmt = 'hf'
+    else:
+        input_fmt = resolve_fmt(args.input, args.input_format)
+        if not input_fmt:
+            logging.error("Cannot detect input format. Supply --input-format."); sys.exit(1)
 
     excel_sheet: Any = 0
     if input_fmt in {'.xlsx', '.xls'}:
@@ -381,7 +411,7 @@ def main() -> None:
         except ConfigurationError as exc:
             logging.error(str(exc)); sys.exit(1)
 
-    if args.input != _STDIN and not os.path.exists(args.input):
+    if args.input != _STDIN and not is_hub_input and not os.path.exists(args.input):
         logging.error(f"Input file not found: {args.input}"); sys.exit(1)
 
     if args.output not in {_STDOUT, '/dev/null'}:
@@ -391,9 +421,40 @@ def main() -> None:
     output_fmt = resolve_fmt(args.output, args.output_format)
     if not output_fmt:
         if no_output_early or args.output == '/dev/null':
-            output_fmt = input_fmt or '.jsonl'
+            output_fmt = input_fmt if input_fmt not in ('', 'hf') else '.jsonl'
         else:
             logging.error("Cannot detect output format. Supply --output-format."); sys.exit(1)
+
+    # Resumable runs
+    resume_skip = 0
+    resume_stats: Optional[Any] = None
+    resume_pseudo: Optional[Dict[str, Any]] = None
+    if args.resume:
+        from sanitizer_pro.checkpoint import load_checkpoint, warn_about_volatile_state
+        problems = []
+        if args.input == _STDIN: problems.append("stdin input")
+        if args.output in {_STDOUT, '/dev/null'}: problems.append("stdout//dev/null output")
+        if args.dry_run or args.stats_only: problems.append("--dry-run/--stats-only")
+        if split_spec or args.shard_size: problems.append("--split/--shard-size")
+        if args.keep_top_percent is not None: problems.append("--keep-top-percent")
+        if args.jobs > 1: problems.append("--jobs > 1")
+        if output_fmt not in {'.jsonl', '.txt', '.csv'}:
+            problems.append(f"{output_fmt} output (appendable formats: .jsonl/.txt/.csv)")
+        if problems:
+            logging.error(f"--resume is not compatible with: {', '.join(problems)}"); sys.exit(1)
+        if args.checkpoint_interval < 1:
+            logging.error("--checkpoint-interval must be >= 1."); sys.exit(1)
+        try:
+            ckpt = load_checkpoint(args.output, args.input)
+        except ConfigurationError as exc:
+            logging.error(str(exc)); sys.exit(1)
+        if ckpt:
+            resume_skip = int(ckpt['records_read'])
+            resume_stats = ckpt['stats']
+            resume_pseudo = ckpt.get('pseudo')
+            warn_about_volatile_state(args)
+            logging.info(f"Resuming from checkpoint: skipping {resume_skip:,} "
+                         "already-processed input records, appending to output.")
 
     # Load optional resources
     try:
@@ -403,7 +464,10 @@ def main() -> None:
     except Exception as exc:
         logging.error(f"Failed to load auxiliary config: {exc}"); sys.exit(1)
     truncator = TokenTruncator(args.max_tokens, args.tokenizer) if args.max_tokens else None
-    pseudo_registry = PseudoRegistry() if args.pii_pseudonymize else None
+    if args.pii_pseudonymize:
+        pseudo_registry = PseudoRegistry.from_state(resume_pseudo) if resume_pseudo else PseudoRegistry()
+    else:
+        pseudo_registry = None
 
     ner_redactor = None
     if args.pii_ner and args.remove_pii:
@@ -463,21 +527,48 @@ def main() -> None:
 
     no_output = args.dry_run or args.stats_only
     try:
-        deduper = make_deduper(args.dedup_backend, args.dedup_db_path, fuzzy=args.fuzzy_dedup,
-                               fuzzy_threshold=args.fuzzy_threshold) if (args.deduplicate or args.fuzzy_dedup) else None
+        deduper = make_deduper(
+            args.dedup_backend, args.dedup_db_path, fuzzy=args.fuzzy_dedup,
+            fuzzy_threshold=args.fuzzy_threshold, semantic=args.semantic_dedup,
+            semantic_threshold=args.semantic_threshold, semantic_model=args.semantic_model,
+        ) if (args.deduplicate or args.fuzzy_dedup or args.semantic_dedup) else None
     except ImportError as exc:
         logging.error(str(exc)); sys.exit(1)
-    run_stats = RunStats()
+    run_stats = RunStats.from_state(resume_stats) if resume_stats else RunStats()
 
     try:
         record_iter: Iterator[Dict[str, Any]] = read_records(
             args.input, encoding=args.encoding, paragraph_mode=args.paragraph_mode,
             csv_delimiter=args.csv_delimiter, csv_no_header=args.csv_no_header,
             csv_columns=args.csv_columns_list, excel_sheet=excel_sheet,
-            excel_warn_mb=args.excel_warn_size, input_format=input_fmt, json_path=args.json_path
+            excel_warn_mb=args.excel_warn_size,
+            input_format=None if is_hub_input else input_fmt,
+            json_path=args.json_path, hf_cache=args.hf_cache
         )
     except Exception as exc:
         logging.critical(f"Failed to open input: {exc}"); sys.exit(1)
+
+    if resume_skip:
+        def _skip_consumed(it: Iterator[Dict[str, Any]], n: int) -> Iterator[Dict[str, Any]]:
+            consumed = 0
+            for rec in it:
+                if consumed < n:
+                    consumed += 1
+                    continue
+                yield rec
+        record_iter = _skip_consumed(record_iter, resume_skip)
+
+    def _maybe_checkpoint(writer: Any) -> None:
+        if not args.resume or run_stats.total % args.checkpoint_interval != 0:
+            return
+        from sanitizer_pro.checkpoint import save_checkpoint
+        if writer is not None:
+            writer.flush()
+        if deduper is not None and hasattr(deduper, 'flush'):
+            deduper.flush()
+        save_checkpoint(args.output, input_path=args.input, records_read=run_stats.total,
+                        stats_state=run_stats.to_state(),
+                        pseudo_state=pseudo_registry.to_state() if pseudo_registry else None)
 
     use_progress = TQDM_AVAILABLE and not args.no_progress and not args.quiet and args.input != _STDIN
 
@@ -532,7 +623,7 @@ def main() -> None:
             return
 
         if deduper is not None:
-            if args.fuzzy_dedup:
+            if args.fuzzy_dedup or args.semantic_dedup:
                 if deduper.contains(quality_text):
                     run_stats.deduplicated += 1
                     return
@@ -638,6 +729,7 @@ def main() -> None:
                     and sum(run_stats.pii_counts.values()) > pii_before):
                 audit_samples.add_pii_diff(record, sanitized)
             _handle(sanitized, reason, quality_text, lang, writer, original=record)
+            _maybe_checkpoint(writer)
 
     def _run(writer: Any) -> None:
         _process(writer=writer)
@@ -654,11 +746,26 @@ def main() -> None:
             writer_ctx = ShardedWriter(args.output, output_fmt, args.encoding, args.shard_size, txt_fallback_field=args.txt_fallback_field)
             with writer_ctx as writer: _run(writer=writer)
         else:
-            writer_ctx = StreamingWriter(args.output, output_fmt, args.encoding, txt_fallback_field=args.txt_fallback_field)
+            writer_ctx = StreamingWriter(args.output, output_fmt, args.encoding,
+                                         txt_fallback_field=args.txt_fallback_field,
+                                         append=resume_stats is not None)
             with writer_ctx as writer: _run(writer=writer)
+        if args.resume:
+            from sanitizer_pro.checkpoint import clear_checkpoint
+            clear_checkpoint(args.output)
     except KeyboardInterrupt:
         logging.warning("Interrupted — flushing output …")
         if writer_ctx is not None and hasattr(writer_ctx, 'flush'): writer_ctx.flush()
+        if args.resume:
+            from sanitizer_pro.checkpoint import save_checkpoint
+            try:
+                save_checkpoint(args.output, input_path=args.input,
+                                records_read=run_stats.total,
+                                stats_state=run_stats.to_state(),
+                                pseudo_state=pseudo_registry.to_state() if pseudo_registry else None)
+                logging.info("Checkpoint saved; rerun the same command with --resume to continue.")
+            except Exception as exc:
+                logging.warning(f"Could not save checkpoint on interrupt: {exc}")
         sys.exit(130)
     except Exception as exc:
         logging.critical(f"Fatal error: {exc}", exc_info=True)

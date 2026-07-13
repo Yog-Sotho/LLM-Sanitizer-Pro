@@ -32,11 +32,17 @@ class StreamingWriter:
     """Write records one at a time; buffered formats (Excel/Parquet) collect and
     materialize on close. JSON output is atomic (tmp file + os.replace)."""
 
+    APPENDABLE_FORMATS = {'.jsonl', '.txt', '.csv'}
+
     def __init__(self, output_path: str, fmt: str, encoding: str = 'utf-8',
-                 txt_fallback_field: Optional[str] = None) -> None:
+                 txt_fallback_field: Optional[str] = None, append: bool = False) -> None:
         if fmt not in SUPPORTED_OUTPUT_FORMATS:
             raise ConfigurationError(
                 f"Unsupported output format '{fmt}'. Supported: {sorted(SUPPORTED_OUTPUT_FORMATS)}")
+        if append and fmt not in self.APPENDABLE_FORMATS:
+            raise ConfigurationError(
+                f"Append/resume is only supported for {sorted(self.APPENDABLE_FORMATS)} outputs.")
+        self.append = append
         if fmt in {'.xlsx', '.xls'} and not (xlsxwriter or pd):
             raise ImportError("Excel output requires: pip install xlsxwriter (or pandas+openpyxl)")
         if fmt == '.parquet' and not (pa and pq):
@@ -62,7 +68,21 @@ class StreamingWriter:
                 self._file = smart_open(self._tmp_path, 'w', encoding=self.encoding)
             self._file.write('[\n')
         elif self.fmt in {'.jsonl', '.txt', '.csv'}:
-            self._file = smart_open(self.output_path, 'w', encoding=self.encoding)
+            if self.append and self.fmt == '.csv' and os.path.exists(self.output_path) \
+                    and os.path.getsize(self.output_path) > 0:
+                # Recover the original header so appended rows keep column order
+                # and no second header row is emitted.
+                with smart_open(self.output_path, 'r', encoding=self.encoding) as existing:
+                    header = existing.readline()
+                fields = next(csv.reader([header])) if header.strip() else None
+                self._file = smart_open(self.output_path, 'a', encoding=self.encoding)
+                if fields:
+                    self._csv_fields = fields
+                    self._csv_writer = csv.DictWriter(
+                        self._file, fieldnames=fields, extrasaction='ignore')
+            else:
+                self._file = smart_open(self.output_path, 'a' if self.append else 'w',
+                                        encoding=self.encoding)
         return self
 
     def write(self, record: Dict[str, Any]) -> None:

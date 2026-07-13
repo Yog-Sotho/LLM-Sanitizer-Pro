@@ -37,6 +37,9 @@ all = [
 ner = [
     "spacy>=3.5.0",
 ]
+semantic = [
+    "model2vec>=0.3.0",
+]
 dev = [
     "ruff>=0.1.0",
     "mypy>=1.5.0",

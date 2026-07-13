@@ -11,21 +11,15 @@ References come from two sources, usable together:
   * Named benchmarks (``--decontaminate mmlu,gsm8k,...``) auto-downloaded from
     the Hugging Face Hub's parquet endpoints and cached locally.
 """
-import json
 import logging
 import os
 import re
-import ssl
-import urllib.request
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Any, Dict, Iterator, List, Optional, Set, Tuple
 
 from sanitizer_pro.utils import ConfigurationError
 
 _NORM_RE = re.compile(r'[\W_]+', re.UNICODE)
-_HF_PARQUET_API = 'https://huggingface.co/api/datasets/{repo}/parquet'
-_DEFAULT_CACHE = os.path.join('~', '.cache', 'llm-sanitizer-pro', 'benchmarks')
 
 
 def normalize_for_ngrams(text: str) -> List[str]:
@@ -136,81 +130,11 @@ def resolve_benchmark_names(spec: str) -> List[str]:
     return names
 
 
-def _ssl_context() -> ssl.SSLContext:
-    cafile = (os.environ.get('REQUESTS_CA_BUNDLE') or os.environ.get('SSL_CERT_FILE')
-              or os.environ.get('CURL_CA_BUNDLE'))
-    return ssl.create_default_context(cafile=cafile if cafile and os.path.exists(cafile) else None)
-
-
-def _http_get(url: str, timeout: float = 60.0) -> bytes:
-    req = urllib.request.Request(url, headers={'User-Agent': 'llm-sanitizer-pro'})
-    with urllib.request.urlopen(req, timeout=timeout, context=_ssl_context()) as resp:
-        return resp.read()
-
-
-def select_parquet_urls(api_json: Dict[str, Any], parts: Tuple[Tuple[str, str], ...],
-                        repo: str) -> List[str]:
-    """Pick the parquet URLs for the requested (config, split) pairs."""
-    urls: List[str] = []
-    for config, split in parts:
-        try:
-            urls.extend(api_json[config][split])
-        except (KeyError, TypeError):
-            raise ConfigurationError(
-                f"Hub has no parquet for {repo} config='{config}' split='{split}'. "
-                f"Available configs: {sorted(api_json)}") from None
-    if not urls:
-        raise ConfigurationError(f"No parquet files listed for {repo}.")
-    return urls
-
-
-def download_benchmark(name: str, cache_dir: Optional[str] = None) -> List[Path]:
-    """Download (or reuse cached) parquet files for a known benchmark."""
-    spec = KNOWN_BENCHMARKS[name]
-    base = Path(os.path.expanduser(cache_dir or _DEFAULT_CACHE)) / name
-    base.mkdir(parents=True, exist_ok=True)
-
-    manifest = base / 'manifest.json'
-    if manifest.exists():
-        try:
-            cached = [base / f for f in json.loads(manifest.read_text())]
-            if cached and all(p.exists() and p.stat().st_size > 0 for p in cached):
-                return cached
-        except Exception:
-            pass  # stale/corrupt manifest — re-download
-
-    api_json = json.loads(_http_get(_HF_PARQUET_API.format(repo=spec.repo)))
-    urls = select_parquet_urls(api_json, spec.parts, spec.repo)
-
-    paths: List[Path] = []
-    for i, url in enumerate(urls):
-        dest = base / f"part-{i:03d}.parquet"
-        logging.info(f"Downloading {name} benchmark shard {i + 1}/{len(urls)} …")
-        tmp = dest.with_suffix('.tmp')
-        tmp.write_bytes(_http_get(url, timeout=300.0))
-        os.replace(tmp, dest)
-        paths.append(dest)
-    manifest.write_text(json.dumps([p.name for p in paths]))
-    return paths
-
-
 def iter_benchmark_texts(name: str, cache_dir: Optional[str] = None) -> Iterator[str]:
     """Yield the reference text of every record in a known benchmark."""
-    try:
-        import pyarrow.parquet as pq
-    except ImportError:
-        raise ImportError(
-            "--decontaminate needs pyarrow to read benchmark parquet files "
-            "(pip install pyarrow). Alternatively supply local reference files "
-            "via --decontam-refs.") from None
+    from sanitizer_pro.hub import iter_parquet_texts
     spec = KNOWN_BENCHMARKS[name]
-    for path in download_benchmark(name, cache_dir):
-        for batch in pq.ParquetFile(str(path)).iter_batches(columns=None):
-            for record in batch.to_pylist():
-                for field in spec.fields:
-                    v = record.get(field)
-                    if isinstance(v, str) and v.strip():
-                        yield v
+    yield from iter_parquet_texts(spec.repo, spec.parts, spec.fields, cache_dir=cache_dir)
 
 
 def _iter_strings(value: Any, _depth: int = 0) -> Iterator[str]:
