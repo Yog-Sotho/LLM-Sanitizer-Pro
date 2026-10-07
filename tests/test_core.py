@@ -1,24 +1,17 @@
 """Tests for record sanitization, hashing, and LLM formatting."""
-import argparse
 import datetime
 
 from sanitizer_pro.core import (
     format_chatml, format_instruct, get_record_hash, sanitize_record, TokenTruncator,
 )
+from sanitizer_pro.settings import SanitizerConfig
 from sanitizer_pro.utils import FilterReason
 
 
-def make_args(**overrides) -> argparse.Namespace:
-    base = dict(
-        clean_html=False, remove_pii=False, pii_mask=False,
-        min_chars=1, max_chars=100000, min_words=1,
-        min_ascii_ratio=0.0, min_unique_ratio=0.0,
-        reject_allcaps=False, reject_code=False, reject_profanity=False,
-        max_depth=100, text_fields_depth=20, lang_confidence=0.0,
-        format_chatml=False, format_instruct=False,
-    )
+def make_args(**overrides) -> SanitizerConfig:
+    base = dict(min_chars=1, max_chars=100000, min_words=1, min_unique_ratio=0.0)
     base.update(overrides)
-    return argparse.Namespace(**base)
+    return SanitizerConfig(**base)
 
 
 class TestGetRecordHash:
@@ -61,7 +54,7 @@ class TestSanitizeRecord:
     def test_require_fields(self):
         out, reason, _, _ = sanitize_record(
             {"text": "long enough text", "label": ""},
-            make_args(), require_fields=["label"])
+            make_args(require_fields=["label"]))
         assert out is None and reason == FilterReason.REQUIRE
 
     def test_pii_removed_recursively(self):
@@ -74,7 +67,7 @@ class TestSanitizeRecord:
     def test_field_ops_drop_and_rename(self):
         rec = {"secret": "x", "old": "some sufficiently long text value"}
         field_ops = ({"old": "new"}, {"secret"}, set(), set())
-        out, reason, _, _ = sanitize_record(rec, make_args(), field_ops=field_ops)
+        out, reason, _, _ = sanitize_record(rec, make_args(field_ops=field_ops))
         assert reason is None
         assert "secret" not in out and out["new"] == "some sufficiently long text value"
 

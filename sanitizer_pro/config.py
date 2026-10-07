@@ -5,7 +5,7 @@ import difflib
 import importlib.util
 import json
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Set, Tuple
+from typing import Any, Callable, Dict, List, Optional, Set, Tuple, cast
 import re
 
 from sanitizer_pro.utils import ConfigurationError
@@ -22,8 +22,12 @@ def load_config_file(config_path: str) -> Dict[str, Any]:
     raw = p.read_text(encoding='utf-8')
     if p.suffix.lower() in {'.yaml', '.yml'}:
         if not YAML_AVAILABLE: raise ConfigurationError("YAML config requires: pip install pyyaml")
-        return yaml.safe_load(raw) or {}
-    return json.loads(raw)
+        data = yaml.safe_load(raw) or {}
+    else:
+        data = json.loads(raw)
+    if not isinstance(data, dict):
+        raise ConfigurationError(f"Config file must contain a mapping: {config_path}")
+    return data
 
 def collect_explicit_args(parser: argparse.ArgumentParser) -> Set[str]:
     """Safely detect explicit CLI args without mutating the original parser."""
@@ -96,8 +100,9 @@ def load_quality_script(path: str) -> Callable[[Dict[str, Any]], bool]:
     if spec is None or spec.loader is None: raise ImportError(f"Cannot load: {path}")
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
-    if not hasattr(module, 'quality_check'): raise AttributeError(f"{path} must define quality_check")
-    return module.quality_check
+    check = getattr(module, 'quality_check', None)
+    if not callable(check): raise AttributeError(f"{path} must define quality_check")
+    return cast(Callable[[Dict[str, Any]], bool], check)
 
 def load_custom_pii_patterns(path: str) -> List[Tuple[re.Pattern[str], str, str]]:
     entries = json.loads(Path(path).read_text(encoding='utf-8'))

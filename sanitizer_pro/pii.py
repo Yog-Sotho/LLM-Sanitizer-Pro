@@ -3,7 +3,7 @@ import html
 import ipaddress
 import re
 import unicodedata
-from typing import Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 _BLOCK_TAGS = frozenset(
     'address article aside blockquote body br caption dd details dialog div dl dt '
@@ -264,11 +264,11 @@ class PseudoRegistry:
     def to_dict(self) -> Dict[str, str]:
         return dict(self._map)
 
-    def to_state(self) -> Dict[str, Dict]:
+    def to_state(self) -> Dict[str, Dict[str, Any]]:
         return {'map': dict(self._map), 'counts': dict(self._counts)}
 
     @classmethod
-    def from_state(cls, state: Dict[str, Dict]) -> 'PseudoRegistry':
+    def from_state(cls, state: Dict[str, Dict[str, Any]]) -> 'PseudoRegistry':
         reg = cls()
         reg._map = dict(state.get('map', {}))
         reg._counts = dict(state.get('counts', {}))

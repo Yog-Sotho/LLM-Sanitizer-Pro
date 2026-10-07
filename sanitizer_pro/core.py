@@ -1,16 +1,18 @@
 """Core sanitization logic, recursive traversal, and LLM formatting."""
-import argparse
-import json
+import functools
 import hashlib
+import json
 import re
-from typing import Any, Callable, Dict, List, Optional, Set, Tuple
+from typing import Any, Callable, Dict, List, NamedTuple, Optional, Set
 
+from sanitizer_pro.settings import FieldOps, PiiPattern, SanitizerConfig
 from sanitizer_pro.utils import FilterReason, _MAX_DEPTH_DEFAULT
 from sanitizer_pro.pii import clean_text, redact_pii, PseudoRegistry
 from sanitizer_pro.secrets import redact_secrets as _redact_secrets_fn
 from sanitizer_pro.quality import extract_text_for_quality, _check_quality_reason, detect_language, is_code_heuristic, contains_profanity
 
-FieldOps = Tuple[Dict[str, str], Set[str], Set[str], Set[str]]
+__all__ = ['FieldOps', 'RecordTransformer', 'TokenTruncator', 'Transformed', 'format_chatml',
+           'format_instruct', 'get_record_hash', 'make_report_redactor', 'sanitize_record']
 _TOKEN_RE = re.compile(r'\S+')
 
 class TokenTruncator:
@@ -41,18 +43,13 @@ class TokenTruncator:
 
 def _sanitize_value(
     v: Any, *, remove_html: bool, remove_pii: bool, pii_mask: bool,
-    extra_pii: Optional[List], pseudo_registry: Optional[PseudoRegistry],
+    extra_pii: Optional[List[PiiPattern]], pseudo_registry: Optional[PseudoRegistry],
     field_pii_only: bool, field_no_clean: bool, max_depth: int,
     truncator: Optional[TokenTruncator], ner_redactor: Optional[Any] = None,
     pii_counters: Optional[Dict[str, int]] = None, redact_secrets: bool = False,
     _depth: int = 0
 ) -> Any:
     if _depth > max_depth: return v
-    kw = dict(remove_html=remove_html, remove_pii=remove_pii, pii_mask=pii_mask,
-              extra_pii=extra_pii, pseudo_registry=pseudo_registry,
-              field_pii_only=field_pii_only, field_no_clean=field_no_clean,
-              max_depth=max_depth, truncator=truncator, ner_redactor=ner_redactor,
-              pii_counters=pii_counters, redact_secrets=redact_secrets, _depth=_depth + 1)
 
     if isinstance(v, str):
         if field_no_clean: return v
@@ -73,12 +70,19 @@ def _sanitize_value(
             cleaned = redact_pii(cleaned, mask=pii_mask, extra_patterns=extra_pii, pseudo_registry=pseudo_registry, counters=pii_counters)
         if truncator: cleaned = truncator.truncate(cleaned)
         return cleaned
-    if isinstance(v, dict): return {k: _sanitize_value(val, **kw) for k, val in v.items()}
-    if isinstance(v, list): return [_sanitize_value(item, **kw) for item in v]
-    return v
+    if not isinstance(v, (dict, list)):
+        return v
+    recurse = functools.partial(
+        _sanitize_value, remove_html=remove_html, remove_pii=remove_pii, pii_mask=pii_mask,
+        extra_pii=extra_pii, pseudo_registry=pseudo_registry, field_pii_only=field_pii_only,
+        field_no_clean=field_no_clean, max_depth=max_depth, truncator=truncator,
+        ner_redactor=ner_redactor, pii_counters=pii_counters, redact_secrets=redact_secrets,
+        _depth=_depth + 1)
+    if isinstance(v, dict): return {k: recurse(val) for k, val in v.items()}
+    return [recurse(item) for item in v]
 
 def make_report_redactor(
-    remove_pii: bool, redact_secrets: bool, extra_pii: Optional[List] = None,
+    remove_pii: bool, redact_secrets: bool, extra_pii: Optional[List[PiiPattern]] = None,
     ner_redactor: Optional[Any] = None, max_depth: int = _MAX_DEPTH_DEFAULT,
 ) -> Optional[Callable[[Any], Any]]:
     """Redactor for audit-report samples of dropped records.
@@ -100,63 +104,114 @@ def make_report_redactor(
     return _redact
 
 
+class Transformed(NamedTuple):
+    """Result of the per-record stage: the cleaned record, or None plus the
+    reason it failed a gate. `quality_text` is the text the gates saw."""
+    record: Optional[Dict[str, Any]]
+    reason: Optional[FilterReason]
+    quality_text: str
+    lang: Optional[str]
+
+
 def sanitize_record(
-    record: Any, args: argparse.Namespace, text_fields: Optional[List[str]] = None,
-    extra_pii_patterns: Optional[List] = None, lang_filter: Optional[Set[str]] = None,
-    field_ops: Optional[FieldOps] = None, truncator: Optional[TokenTruncator] = None,
-    pseudo_registry: Optional[PseudoRegistry] = None, require_fields: Optional[List[str]] = None,
-    quality_fn: Optional[Callable] = None, ner_redactor: Optional[Any] = None,
-    pii_counters: Optional[Dict[str, int]] = None
-) -> Tuple[Optional[Dict[str, Any]], Optional[FilterReason], str, Optional[str]]:
+    record: Any, config: SanitizerConfig, *,
+    pseudo_registry: Optional[PseudoRegistry] = None,
+    pii_counters: Optional[Dict[str, int]] = None,
+    truncator: Optional[TokenTruncator] = None,
+    ner_redactor: Optional[Any] = None,
+    lang_filter: Optional[Set[str]] = None,
+    quality_fn: Optional[Callable[[Dict[str, Any]], bool]] = None,
+) -> Transformed:
+    """Clean, redact and gate one record (no cross-record state besides the
+    optional pseudonym registry). Optional resources are normally supplied by
+    RecordTransformer, which builds them from the config."""
     if not isinstance(record, dict):
-        return None, FilterReason.QUALITY, '', None
-        
-    renames, drops, pii_only, no_clean = field_ops if field_ops else ({}, set(), set(), set())
+        return Transformed(None, FilterReason.QUALITY, '', None)
+    c = config
+
+    renames, drops, pii_only, no_clean = c.field_ops if c.field_ops else ({}, set(), set(), set())
     if drops: record = {k: v for k, v in record.items() if k not in drops}
     if renames: record = {renames.get(k, k): v for k, v in record.items()}
 
     sanitized: Dict[str, Any] = {
         fname: _sanitize_value(
-            val, remove_html=args.clean_html, remove_pii=args.remove_pii, pii_mask=args.pii_mask,
-            extra_pii=extra_pii_patterns, pseudo_registry=pseudo_registry,
+            val, remove_html=c.clean_html, remove_pii=c.remove_pii, pii_mask=c.pii_mask,
+            extra_pii=c.extra_pii_patterns, pseudo_registry=pseudo_registry,
             field_pii_only=(fname in pii_only), field_no_clean=(fname in no_clean),
-            max_depth=getattr(args, 'max_depth', _MAX_DEPTH_DEFAULT), truncator=truncator,
+            max_depth=c.max_depth, truncator=truncator,
             ner_redactor=ner_redactor, pii_counters=pii_counters,
-            redact_secrets=getattr(args, 'redact_secrets', False)
+            redact_secrets=c.redact_secrets
         ) for fname, val in record.items()
     }
 
-    if require_fields:
-        for rf in require_fields:
-            v = sanitized.get(rf)
-            is_empty = v is None or (isinstance(v, str) and not v.strip()) or (not isinstance(v, (bool, int, float)) and not v)
-            if is_empty: return None, FilterReason.REQUIRE, '', None
+    for rf in c.require_fields or ():
+        v = sanitized.get(rf)
+        is_empty = v is None or (isinstance(v, str) and not v.strip()) or (not isinstance(v, (bool, int, float)) and not v)
+        if is_empty: return Transformed(None, FilterReason.REQUIRE, '', None)
 
-    quality_text = extract_text_for_quality(sanitized, text_fields=text_fields, max_depth=getattr(args, 'text_fields_depth', 20))
-    
-    if getattr(args, 'reject_code', False) and is_code_heuristic(quality_text):
-        return None, FilterReason.CODE, '', None
-    if getattr(args, 'reject_profanity', False) and contains_profanity(quality_text):
-        return None, FilterReason.PROFANITY, '', None
+    quality_text = extract_text_for_quality(sanitized, text_fields=c.text_fields,
+                                            max_depth=c.text_fields_depth)
 
-    reason_str = _check_quality_reason(quality_text, args)
-    if reason_str: return None, FilterReason.QUALITY, '', None
-
+    if c.reject_code and is_code_heuristic(quality_text):
+        return Transformed(None, FilterReason.CODE, '', None)
+    if c.reject_profanity and contains_profanity(quality_text):
+        return Transformed(None, FilterReason.PROFANITY, '', None)
+    if _check_quality_reason(quality_text, c):
+        return Transformed(None, FilterReason.QUALITY, '', None)
     if quality_fn and not quality_fn(sanitized):
-        return None, FilterReason.QUALITY, '', None
+        return Transformed(None, FilterReason.QUALITY, '', None)
 
     detected_lang: Optional[str] = None
     if lang_filter:
-        detected_lang, conf = detect_language(quality_text, min_confidence=getattr(args, 'lang_confidence', 0.0))
-        if detected_lang not in lang_filter: return None, FilterReason.LANGUAGE, '', None
+        detected_lang, _conf = detect_language(quality_text, min_confidence=c.lang_confidence)
+        if detected_lang not in lang_filter:
+            return Transformed(None, FilterReason.LANGUAGE, '', None)
 
     # LLM Formatting
-    if getattr(args, 'format_chatml', False):
+    if c.format_chatml:
         sanitized = format_chatml(sanitized)
-    elif getattr(args, 'format_instruct', False):
+    elif c.format_instruct:
         sanitized = format_instruct(sanitized)
 
-    return sanitized, None, quality_text, detected_lang
+    return Transformed(sanitized, None, quality_text, detected_lang)
+
+
+class RecordTransformer:
+    """The per-record stage of the pipeline, built from a SanitizerConfig.
+
+    Owns the stage's resources (token truncator, NER model, language filter,
+    quality script). It keeps no cross-record state, so worker processes build
+    their own copy from the (picklable) config; the stateful stages live in
+    Sanitizer."""
+
+    def __init__(self, config: SanitizerConfig, ner_redactor: Optional[Any] = None) -> None:
+        self.config = config
+        self.truncator = TokenTruncator(config.max_tokens, config.tokenizer) \
+            if config.max_tokens else None
+        self.lang_filter: Optional[Set[str]] = \
+            {x.lower() for x in config.lang_filter} if config.lang_filter else None
+        self.quality_fn: Optional[Callable[[Dict[str, Any]], bool]] = None
+        if config.quality_script:
+            from sanitizer_pro.config import load_quality_script
+            self.quality_fn = load_quality_script(config.quality_script)
+        self.ner = ner_redactor
+        if self.ner is None and config.pii_ner and config.remove_pii:
+            from sanitizer_pro.ner import NERRedactor
+            self.ner = NERRedactor(backend=config.pii_ner_backend,
+                                   entities=config.pii_ner_entities, model=config.pii_ner_model)
+
+    def transform(self, record: Any, pseudo_registry: Optional[PseudoRegistry] = None,
+                  pii_counters: Optional[Dict[str, int]] = None) -> Transformed:
+        return sanitize_record(
+            record, self.config, pseudo_registry=pseudo_registry, pii_counters=pii_counters,
+            truncator=self.truncator, ner_redactor=self.ner, lang_filter=self.lang_filter,
+            quality_fn=self.quality_fn)
+
+    def report_redactor(self) -> Optional[Callable[[Any], Any]]:
+        c = self.config
+        return make_report_redactor(c.remove_pii, c.redact_secrets, extra_pii=c.extra_pii_patterns,
+                                    ner_redactor=self.ner, max_depth=c.max_depth)
+
 
 def format_chatml(record: Dict[str, Any]) -> Dict[str, Any]:
     if isinstance(record.get("messages"), list):

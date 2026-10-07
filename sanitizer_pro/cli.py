@@ -1,52 +1,50 @@
 """Command Line Interface and main orchestration loop for LLM Dataset Sanitizer PRO."""
 import argparse
+import contextlib
 import json
 import logging
 import multiprocessing
 import os
-import random
 import sys
 import time
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, Iterator, List, Optional, Tuple
+from typing import Any, Dict, Iterable, Iterator, List, Optional
 
 try:
     from tqdm import tqdm as _tqdm
     TQDM_AVAILABLE = True
 except ImportError:
-    _tqdm = None  # type: ignore[assignment]
+    _tqdm = None
     TQDM_AVAILABLE = False
 
 try:
     import openpyxl as _openpyxl
     OPENPYXL_AVAILABLE = True
 except ImportError:
-    _openpyxl = None  # type: ignore[assignment]
+    _openpyxl = None
     OPENPYXL_AVAILABLE = False
 
 try:
     import pandas as pd
     PANDAS_AVAILABLE = True
 except ImportError:
-    pd = None  # type: ignore[assignment]
+    pd = None
     PANDAS_AVAILABLE = False
 
-from sanitizer_pro.utils import (
-    FilterReason, ConfigurationError, _STDIN, _STDOUT, _EXCEL_WARN_MB_DEFAULT, _MAX_DEPTH_DEFAULT,
-    _ALLCAPS_MIN_LEN_DEFAULT, _ALLCAPS_MIN_ALPHA_DEFAULT, resolve_fmt
-)
-from sanitizer_pro.config import (
-    load_config_file, collect_explicit_args, apply_config_to_args,
-    load_custom_pii_patterns, load_field_config, build_field_ops, load_quality_script
-)
-from sanitizer_pro.core import sanitize_record, TokenTruncator, get_record_hash, make_report_redactor
-from sanitizer_pro.decontam import full_text_for_decontam
-from sanitizer_pro.dedup import make_deduper
-from sanitizer_pro.pii import PseudoRegistry
+from sanitizer_pro import __version__
+from sanitizer_pro.api import Sanitizer
+from sanitizer_pro.config import apply_config_to_args, collect_explicit_args, load_config_file
 from sanitizer_pro.io.readers import read_records
-from sanitizer_pro.io.writers import StreamingWriter, ShardedWriter, SplitWriter, parse_split_spec
+from sanitizer_pro.io.writers import ShardedWriter, SplitWriter, StreamingWriter, parse_split_spec
+from sanitizer_pro.pii import PseudoRegistry
+from sanitizer_pro.settings import DEFAULTS as D
+from sanitizer_pro.settings import (
+    DEDUP_BACKENDS, NER_BACKENDS, QUALITY_SCORERS, SanitizerConfig, as_list,
+)
 from sanitizer_pro.stats import RunStats
-from sanitizer_pro.worker import _worker_init, _worker_fn
+from sanitizer_pro.utils import _EXCEL_WARN_MB_DEFAULT, _STDIN, _STDOUT, ConfigurationError, resolve_fmt
+from sanitizer_pro.worker import _worker_fn, _worker_init
 
 # =============================================================================
 # Constants
@@ -62,7 +60,7 @@ BANNER = r"""
 ║   ██████╔╝██║  ██║   ██║   ██║  ██║███████║███████╗   ██║   ║
 ║   ╚═════╝ ╚═╝  ╚═╝   ╚═╝   ╚═╝  ╚═╝╚══════╝╚══════╝   ╚═╝   ║
 ║                                                              ║
-║        S A N I T I Z E R   P R O   v 3 . 0                  ║
+║                  S A N I T I Z E R   P R O                   ║
 ║                                                              ║
 ║   ▸ Multi-format  ▸ PII Redaction  ▸ Quality Filtering       ║
 ║   ▸ Fuzzy Dedup   ▸ Parallel Jobs  ▸ LLM-Ready Output        ║
@@ -115,7 +113,7 @@ def resolve_excel_sheet(
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="LLM Dataset Sanitizer PRO v3.0 — Modular Production Cleaner",
+        description=f"LLM Dataset Sanitizer PRO v{__version__} — Modular Production Cleaner",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""Examples:
   sanitize --input data.jsonl --output clean.jsonl --deduplicate --remove-pii
@@ -125,6 +123,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
 
     # Core I/O
+    parser.add_argument('--version', action='version', version=f"sanitize {__version__}")
     parser.add_argument('--input', default=None, help="Input file or '-' for stdin.")
     parser.add_argument('--output', default=None, help="Output file or '-' for stdout.")
     parser.add_argument('--input-format', default=None, metavar='FMT', help="Override input format.")
@@ -137,26 +136,26 @@ def build_parser() -> argparse.ArgumentParser:
 
     # Quality Filters
     qg = parser.add_argument_group('Quality Filters')
-    qg.add_argument('--min-chars', type=int, default=50)
-    qg.add_argument('--max-chars', type=int, default=20000)
-    qg.add_argument('--min-words', type=int, default=8)
-    qg.add_argument('--min-ascii-ratio', type=float, default=0.0,
+    qg.add_argument('--min-chars', type=int, default=D.min_chars)
+    qg.add_argument('--max-chars', type=int, default=D.max_chars)
+    qg.add_argument('--min-words', type=int, default=D.min_words)
+    qg.add_argument('--min-ascii-ratio', type=float, default=D.min_ascii_ratio,
                     help='Reject records whose ASCII-character share is below this '
                          '(0 = off, the default; e.g. 0.85 keeps mostly-English text).')
-    qg.add_argument('--min-unique-ratio', type=float, default=0.25)
+    qg.add_argument('--min-unique-ratio', type=float, default=D.min_unique_ratio)
     qg.add_argument('--text-fields', default='', help='Comma-separated fields for quality scoring.')
-    qg.add_argument('--text-fields-depth', type=int, default=20)
+    qg.add_argument('--text-fields-depth', type=int, default=D.text_fields_depth)
     qg.add_argument('--reject-allcaps', action='store_true')
-    qg.add_argument('--allcaps-min-len', type=int, default=_ALLCAPS_MIN_LEN_DEFAULT)
-    qg.add_argument('--allcaps-min-alpha', type=int, default=_ALLCAPS_MIN_ALPHA_DEFAULT)
+    qg.add_argument('--allcaps-min-len', type=int, default=D.allcaps_min_len)
+    qg.add_argument('--allcaps-min-alpha', type=int, default=D.allcaps_min_alpha)
     qg.add_argument('--require-fields', default='')
     qg.add_argument('--quality-script', default=None, metavar='PATH')
-    qg.add_argument('--max-depth', type=int, default=_MAX_DEPTH_DEFAULT)
+    qg.add_argument('--max-depth', type=int, default=D.max_depth)
     qg.add_argument('--lang-filter', default='')
-    qg.add_argument('--lang-confidence', type=float, default=0.0)
+    qg.add_argument('--lang-confidence', type=float, default=D.lang_confidence)
     qg.add_argument('--reject-code', action='store_true', help='Reject records detected as code snippets.')
     qg.add_argument('--reject-profanity', action='store_true', help='Reject records containing profanity.')
-    qg.add_argument('--quality-scorer', default='heuristic', choices=['heuristic', 'perplexity'],
+    qg.add_argument('--quality-scorer', default=D.quality_scorer, choices=list(QUALITY_SCORERS),
                     help='Scoring backend for --quality-min-score / --keep-top-percent / '
                          '--quality-score-field (default: heuristic, no dependencies).')
     qg.add_argument('--quality-model', default=None, metavar='NAME',
@@ -173,18 +172,18 @@ def build_parser() -> argparse.ArgumentParser:
     fg = parser.add_argument_group('Features')
     fg.add_argument('--deduplicate', action='store_true')
     fg.add_argument('--fuzzy-dedup', action='store_true', help='Use MinHash+LSH for near-duplicate detection.')
-    fg.add_argument('--fuzzy-threshold', type=float, default=0.8, metavar='T',
+    fg.add_argument('--fuzzy-threshold', type=float, default=D.fuzzy_threshold, metavar='T',
                     help='Jaccard similarity threshold for --fuzzy-dedup (0-1, default 0.8).')
     fg.add_argument('--semantic-dedup', action='store_true',
                     help='Embedding-based near-dedup: drops paraphrases that share no '
                          'n-grams (pip install model2vec; ~30MB model, no torch).')
-    fg.add_argument('--semantic-threshold', type=float, default=0.9, metavar='T',
+    fg.add_argument('--semantic-threshold', type=float, default=D.semantic_threshold, metavar='T',
                     help='Cosine similarity threshold for --semantic-dedup (default 0.9).')
-    fg.add_argument('--semantic-model', default='minishlab/potion-base-8M', metavar='NAME',
+    fg.add_argument('--semantic-model', default=D.semantic_model, metavar='NAME',
                     help='model2vec static embedding model for --semantic-dedup.')
     fg.add_argument('--dedup-fields', default='')
     fg.add_argument('--dedup-normalize', action='store_true')
-    fg.add_argument('--dedup-backend', default='memory', choices=['memory', 'sqlite'])
+    fg.add_argument('--dedup-backend', default=D.dedup_backend, choices=list(DEDUP_BACKENDS))
     fg.add_argument('--dedup-db-path', default=None, metavar='PATH')
     fg.add_argument('--remove-pii', action='store_true')
     fg.add_argument('--pii-mask', action='store_true')
@@ -194,7 +193,7 @@ def build_parser() -> argparse.ArgumentParser:
     fg.add_argument('--pii-ner', action='store_true',
                     help='Also detect PII with a named-entity model (person names by default). '
                          'Requires spacy (+en_core_web_sm) or transformers.')
-    fg.add_argument('--pii-ner-backend', default='auto', choices=['auto', 'spacy', 'transformers'])
+    fg.add_argument('--pii-ner-backend', default=D.pii_ner_backend, choices=list(NER_BACKENDS))
     fg.add_argument('--pii-ner-entities', default='person', metavar='KINDS',
                     help='Comma-separated entity kinds to redact: person,location,org (default: person).')
     fg.add_argument('--pii-ner-model', default=None, metavar='NAME',
@@ -208,9 +207,11 @@ def build_parser() -> argparse.ArgumentParser:
     fg.add_argument('--txt-fallback-field', default=None, metavar='FIELD')
     fg.add_argument('--field-config', default=None, metavar='PATH')
     fg.add_argument('--max-tokens', type=int, default=None)
-    fg.add_argument('--tokenizer', default='whitespace')
+    fg.add_argument('--tokenizer', default=D.tokenizer)
     fg.add_argument('--sample', type=float, default=None)
-    fg.add_argument('--seed', type=int, default=None)
+    fg.add_argument('--seed', type=int, default=None,
+                    help='Salt for --sample/--split. Both are decided by a hash of each '
+                         "record's content, so results are reproducible across runs.")
     fg.add_argument('--split', default=None, metavar='SPEC')
     fg.add_argument('--quick', action='store_true')
     fg.add_argument('--format-chatml', action='store_true', help='Format output as ChatML messages.')
@@ -225,9 +226,9 @@ def build_parser() -> argparse.ArgumentParser:
     dg.add_argument('--decontam-refs', default=None, metavar='PATHS',
                     help='Comma-separated local reference files (any supported input format) '
                          'whose text is treated as benchmark material.')
-    dg.add_argument('--decontam-ngram', type=int, default=8, metavar='N',
+    dg.add_argument('--decontam-ngram', type=int, default=D.decontam_ngram, metavar='N',
                     help='Word n-gram size for overlap detection (default 8).')
-    dg.add_argument('--decontam-min-hits', type=int, default=1, metavar='N',
+    dg.add_argument('--decontam-min-hits', type=int, default=D.decontam_min_hits, metavar='N',
                     help='Minimum colliding n-grams to flag a record (default 1).')
     dg.add_argument('--decontam-cache', default=None, metavar='DIR',
                     help='Benchmark download cache dir (default ~/.cache/llm-sanitizer-pro/benchmarks).')
@@ -258,7 +259,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     # I/O
     io_g = parser.add_argument_group('I/O Options')
-    io_g.add_argument('--encoding', default='utf-8')
+    io_g.add_argument('--encoding', default=D.encoding)
     io_g.add_argument('--shard-size', type=int, default=None, metavar='N')
     io_g.add_argument('--json-path', default='item', metavar='PATH')
     io_g.add_argument('--hf-cache', default=None, metavar='DIR',
@@ -298,14 +299,41 @@ def build_parser() -> argparse.ArgumentParser:
 # =============================================================================
 # Main Orchestration
 # =============================================================================
+#
+# The pipeline itself lives in Sanitizer (api.py), shared with library users.
+# This module only adds what a command-line run needs on top: argument and
+# config-file merging, input/output resolution, resumable checkpoints,
+# multiprocessing, progress bars, and the summary/stats/report artifacts.
 
-def main() -> None:
-    parser = build_parser()
-    args = parser.parse_args()
 
+class CliError(Exception):
+    """A user-facing error: logged, then exit code 1."""
+
+
+@dataclass
+class IOPlan:
+    input_fmt: str
+    output_fmt: str
+    is_hub_input: bool
+    excel_sheet: Any
+    split_spec: Optional[Dict[str, float]]
+    no_output: bool
+
+
+@dataclass
+class ResumeState:
+    skip: int = 0
+    stats: Optional[RunStats] = None
+    pseudo: Optional[PseudoRegistry] = None
+    dedup_mark: Optional[int] = None
+
+
+def _print_info_and_exit(args: argparse.Namespace, parser: argparse.ArgumentParser) -> None:
+    """--generate-config, --decontaminate list and --profile list."""
     if args.generate_config is not None:
         template = {a.dest: a.default for a in parser._actions
-                    if a.dest not in {'help', 'generate_config', 'config'} and a.default is not None}
+                    if a.dest not in {'help', 'generate_config', 'config'}
+                    and a.default is not None and a.default is not argparse.SUPPRESS}
         if args.generate_config == 'yaml':
             try:
                 import yaml as _yaml
@@ -316,13 +344,11 @@ def main() -> None:
         else:
             print(json.dumps(template, indent=2))
         sys.exit(0)
-
     if args.decontaminate and args.decontaminate.strip().lower() == 'list':
         from sanitizer_pro.decontam import KNOWN_BENCHMARKS
         for name, spec in sorted(KNOWN_BENCHMARKS.items()):
             print(f"{name:<12} {spec.repo:<40} {spec.note}")
         sys.exit(0)
-
     if args.profile is not None:
         from sanitizer_pro.profiles import PROFILE_NAMES, describe_profiles
         if args.profile.strip().lower() == 'list':
@@ -332,48 +358,30 @@ def main() -> None:
             parser.error(f"--profile must be one of {list(PROFILE_NAMES)} or 'list' "
                          f"(got '{args.profile}').")
 
-    if args.input is None or args.output is None:
-        parser.error("--input and --output are required.")
 
+def _merge_settings(args: argparse.Namespace, parser: argparse.ArgumentParser) -> None:
+    """Precedence: explicit CLI flags > --config > --profile/--quick > defaults."""
     explicit_args = collect_explicit_args(parser)
-
-    # Precedence: explicit CLI flags > --config > --profile > defaults.
     if args.profile:
         from sanitizer_pro.profiles import profile_settings
         for dest, val in profile_settings(args.profile).items():
             if dest not in explicit_args:
                 setattr(args, dest, val)
-
     if args.config:
         try:
-            cfg = load_config_file(args.config)
-            apply_config_to_args(args, cfg, explicit_args, parser)
+            apply_config_to_args(args, load_config_file(args.config), explicit_args, parser)
         except Exception as exc:
             print(f"ERROR loading config: {exc}", file=sys.stderr)
             sys.exit(1)
-
-    # Derived lists (config files may supply these as real lists already)
-    def _as_list(v: Any) -> Optional[List[str]]:
-        if isinstance(v, (list, tuple)):
-            return [str(x).strip() for x in v if str(x).strip()] or None
-        return [f.strip() for f in str(v or '').split(',') if f.strip()] or None
-
-    args.text_fields_list = _as_list(args.text_fields)
-    args.dedup_fields_list = _as_list(args.dedup_fields)
-    args.csv_columns_list = _as_list(args.csv_columns)
-    args.require_fields_list = _as_list(args.require_fields)
-    lang_filter_set = set(x.lower() for x in _as_list(args.lang_filter) or []) or None
-
+    if args.quick:
+        for dest in ('remove_pii', 'deduplicate', 'clean_html', 'dedup_normalize'):
+            if dest not in explicit_args:
+                setattr(args, dest, True)
     if args.debug_records:
         args.log_level = 'DEBUG'
 
-    if getattr(args, 'quick', False):
-        for dest, val in {'remove_pii': True, 'deduplicate': True, 'clean_html': True, 'dedup_normalize': True}.items():
-            if dest not in explicit_args: setattr(args, dest, val)
 
-    if args.seed is not None:
-        random.seed(args.seed)
-
+def _setup_logging(args: argparse.Namespace) -> None:
     eff_level = 'WARNING' if args.quiet else args.log_level
     handler = logging.StreamHandler(sys.stderr)
     if args.log_format == 'json':
@@ -382,453 +390,338 @@ def main() -> None:
     else:
         handler.setFormatter(logging.Formatter('%(asctime)s | %(levelname)s | %(message)s'))
     logging.basicConfig(level=getattr(logging, eff_level), handlers=[handler], force=True)
-
     if (args.log_format != 'json' and not args.quiet
             and eff_level in {'DEBUG', 'INFO'} and args.output != _STDOUT):
         print(BANNER, file=sys.stderr)
 
-    # Validation
-    if args.pii_mask and not args.remove_pii: logging.warning("--pii-mask has no effect without --remove-pii.")
-    if args.pii_pseudonymize and not args.remove_pii: logging.warning("--pii-pseudonymize has no effect without --remove-pii.")
-    if args.pii_ner and not args.remove_pii: logging.warning("--pii-ner has no effect without --remove-pii.")
-    if args.sample is not None and not (0 < args.sample <= 1.0):
-        logging.error("--sample must be in (0, 1]."); sys.exit(1)
-    if args.jobs < 1:
-        logging.error("--jobs must be >= 1."); sys.exit(1)
-    if args.pii_pseudonymize and args.jobs > 1:
-        logging.error("--pii-pseudonymize is not supported with --jobs > 1."); sys.exit(1)
-    if args.shard_size is not None and args.shard_size < 1:
-        logging.error("--shard-size must be >= 1."); sys.exit(1)
-    if not (0 < args.fuzzy_threshold <= 1):
-        logging.error("--fuzzy-threshold must be in (0, 1]."); sys.exit(1)
-    if not (0 < args.semantic_threshold <= 1):
-        logging.error("--semantic-threshold must be in (0, 1]."); sys.exit(1)
-    if args.semantic_dedup and args.fuzzy_dedup:
-        logging.error("--semantic-dedup and --fuzzy-dedup are mutually exclusive "
-                      "(both compare quality text; pick one)."); sys.exit(1)
-    if args.quality_min_score is not None and not (0 <= args.quality_min_score <= 1):
-        logging.error("--quality-min-score must be in [0, 1]."); sys.exit(1)
-    if args.keep_top_percent is not None and not (0 < args.keep_top_percent <= 100):
-        logging.error("--keep-top-percent must be in (0, 100]."); sys.exit(1)
-    if lang_filter_set:
-        from sanitizer_pro.quality import LANGDETECT_AVAILABLE
-        if not LANGDETECT_AVAILABLE:
-            logging.error("--lang-filter requires langdetect (pip install langdetect); "
-                          "without it every record would be filtered out.")
-            sys.exit(1)
 
-    split_spec: Optional[Dict[str, float]] = None
+def _plan_io(args: argparse.Namespace, config: SanitizerConfig) -> IOPlan:
+    """Validate CLI-only options and resolve input/output formats."""
+    if args.jobs < 1:
+        raise CliError("--jobs must be >= 1.")
+    if config.pii_pseudonymize and args.jobs > 1:
+        raise CliError("--pii-pseudonymize is not supported with --jobs > 1.")
+    if args.shard_size is not None and args.shard_size < 1:
+        raise CliError("--shard-size must be >= 1.")
+    split_spec = None
     if args.split:
         if args.shard_size:
-            logging.error("--split and --shard-size are mutually exclusive."); sys.exit(1)
-        try:
-            split_spec = parse_split_spec(args.split)
-        except ConfigurationError as exc:
-            logging.error(str(exc)); sys.exit(1)
+            raise CliError("--split and --shard-size are mutually exclusive.")
+        split_spec = parse_split_spec(args.split)
 
     is_hub_input = str(args.input).startswith('hf://')
     if is_hub_input:
         from sanitizer_pro.hub import parse_hf_uri
-        try:
-            parse_hf_uri(args.input)  # fail fast on malformed URIs
-        except ConfigurationError as exc:
-            logging.error(str(exc)); sys.exit(1)
+        parse_hf_uri(args.input)  # fail fast on malformed URIs
         input_fmt = 'hf'
     else:
         input_fmt = resolve_fmt(args.input, args.input_format)
         if not input_fmt:
-            logging.error("Cannot detect input format. Supply --input-format."); sys.exit(1)
-
+            raise CliError("Cannot detect input format. Supply --input-format.")
     excel_sheet: Any = 0
     if input_fmt in {'.xlsx', '.xls'}:
-        try:
-            excel_sheet = resolve_excel_sheet(args.excel_sheet_name, args.excel_sheet_index, args.input if args.input != _STDIN else None)
-        except ConfigurationError as exc:
-            logging.error(str(exc)); sys.exit(1)
-
+        excel_sheet = resolve_excel_sheet(args.excel_sheet_name, args.excel_sheet_index,
+                                          args.input if args.input != _STDIN else None)
     if args.input != _STDIN and not is_hub_input and not os.path.exists(args.input):
-        logging.error(f"Input file not found: {args.input}"); sys.exit(1)
+        raise CliError(f"Input file not found: {args.input}")
 
     if args.output not in {_STDOUT, '/dev/null'}:
         os.makedirs(os.path.dirname(os.path.abspath(args.output)) or '.', exist_ok=True)
-
-    no_output_early = args.dry_run or args.stats_only
+    no_output = args.dry_run or args.stats_only
     output_fmt = resolve_fmt(args.output, args.output_format)
     if not output_fmt:
-        if no_output_early or args.output == '/dev/null':
-            output_fmt = input_fmt if input_fmt not in ('', 'hf') else '.jsonl'
-        else:
-            logging.error("Cannot detect output format. Supply --output-format."); sys.exit(1)
+        if not (no_output or args.output == '/dev/null'):
+            raise CliError("Cannot detect output format. Supply --output-format.")
+        output_fmt = input_fmt if input_fmt not in ('', 'hf') else '.jsonl'
+    return IOPlan(input_fmt, output_fmt, is_hub_input, excel_sheet, split_spec, no_output)
 
-    # Resumable runs
-    resume_skip = 0
-    resume_stats: Optional[Any] = None
-    resume_pseudo: Optional[Dict[str, Any]] = None
-    resume_dedup_mark: Optional[int] = None
-    if args.resume:
-        from sanitizer_pro.checkpoint import load_checkpoint, warn_about_volatile_state
-        problems = []
-        if args.input == _STDIN: problems.append("stdin input")
-        if args.output in {_STDOUT, '/dev/null'}: problems.append("stdout//dev/null output")
-        if args.dry_run or args.stats_only: problems.append("--dry-run/--stats-only")
-        if split_spec or args.shard_size: problems.append("--split/--shard-size")
-        if args.keep_top_percent is not None: problems.append("--keep-top-percent")
-        if args.jobs > 1: problems.append("--jobs > 1")
-        if output_fmt not in {'.jsonl', '.txt', '.csv'}:
-            problems.append(f"{output_fmt} output (appendable formats: .jsonl/.txt/.csv)")
-        if problems:
-            logging.error(f"--resume is not compatible with: {', '.join(problems)}"); sys.exit(1)
-        if args.checkpoint_interval < 1:
-            logging.error("--checkpoint-interval must be >= 1."); sys.exit(1)
-        try:
-            ckpt = load_checkpoint(args.output, args.input)
-        except ConfigurationError as exc:
-            logging.error(str(exc)); sys.exit(1)
-        if ckpt:
-            resume_skip = int(ckpt['records_read'])
-            resume_stats = ckpt['stats']
-            resume_pseudo = ckpt.get('pseudo')
-            resume_dedup_mark = ckpt.get('dedup_mark')
-            if ckpt.get('rng') is not None:
-                from sanitizer_pro.checkpoint import rng_from_state
-                random.setstate(rng_from_state(ckpt['rng']))
-            from sanitizer_pro.checkpoint import truncate_output_to_checkpoint
-            try:
-                discarded = truncate_output_to_checkpoint(args.output, ckpt.get('output_bytes'))
-            except ConfigurationError as exc:
-                logging.error(str(exc)); sys.exit(1)
-            if discarded:
-                logging.info(f"Discarded {discarded:,} output bytes written after the last "
-                             "checkpoint; those records are re-processed.")
-            warn_about_volatile_state(args)
-            logging.info(f"Resuming from checkpoint: skipping {resume_skip:,} "
-                         "already-processed input records, appending to output.")
 
-    # Load optional resources
-    try:
-        extra_pii = load_custom_pii_patterns(args.pii_patterns_file) if args.pii_patterns_file else None
-        field_ops = build_field_ops(load_field_config(args.field_config)) if args.field_config else None
-        quality_fn = load_quality_script(args.quality_script) if args.quality_script else None
-    except Exception as exc:
-        logging.error(f"Failed to load auxiliary config: {exc}"); sys.exit(1)
-    truncator = TokenTruncator(args.max_tokens, args.tokenizer) if args.max_tokens else None
-    if args.pii_pseudonymize:
-        pseudo_registry = PseudoRegistry.from_state(resume_pseudo) if resume_pseudo else PseudoRegistry()
-    else:
-        pseudo_registry = None
+def _prepare_resume(args: argparse.Namespace, config: SanitizerConfig, plan: IOPlan) -> ResumeState:
+    """Validate --resume and restore the last checkpoint (truncating output
+    written after it)."""
+    if not args.resume:
+        return ResumeState()
+    from sanitizer_pro.checkpoint import (
+        load_checkpoint, truncate_output_to_checkpoint, warn_about_volatile_state,
+    )
+    problems = []
+    if args.input == _STDIN: problems.append("stdin input")
+    if args.output in {_STDOUT, '/dev/null'}: problems.append("stdout//dev/null output")
+    if plan.no_output: problems.append("--dry-run/--stats-only")
+    if plan.split_spec or args.shard_size: problems.append("--split/--shard-size")
+    if config.keep_top_percent is not None: problems.append("--keep-top-percent")
+    if args.jobs > 1: problems.append("--jobs > 1")
+    if plan.output_fmt not in {'.jsonl', '.txt', '.csv'}:
+        problems.append(f"{plan.output_fmt} output (appendable formats: .jsonl/.txt/.csv)")
+    if problems:
+        raise CliError(f"--resume is not compatible with: {', '.join(problems)}")
+    if args.checkpoint_interval < 1:
+        raise CliError("--checkpoint-interval must be >= 1.")
+    ckpt = load_checkpoint(args.output, args.input)
+    if not ckpt:
+        return ResumeState()
+    discarded = truncate_output_to_checkpoint(args.output, ckpt.get('output_bytes'))
+    if discarded:
+        logging.info(f"Discarded {discarded:,} output bytes written after the last "
+                     "checkpoint; those records are re-processed.")
+    warn_about_volatile_state(args)
+    state = ResumeState(skip=int(ckpt['records_read']),
+                        stats=RunStats.from_state(ckpt['stats']),
+                        pseudo=PseudoRegistry.from_state(ckpt['pseudo']) if ckpt.get('pseudo') else None,
+                        dedup_mark=ckpt.get('dedup_mark'))
+    logging.info(f"Resuming from checkpoint: skipping {state.skip:,} already-processed "
+                 "input records, appending to output.")
+    return state
 
-    ner_redactor = None
-    if args.pii_ner and args.remove_pii:
-        from sanitizer_pro.ner import NERRedactor
-        try:
-            # Built here even for --jobs > 1 (workers reload their own copy) so
-            # a missing backend fails fast with a clear message.
-            ner_redactor = NERRedactor(backend=args.pii_ner_backend,
-                                       entities=str(args.pii_ner_entities).split(','),
-                                       model=args.pii_ner_model)
-        except (ConfigurationError, ImportError) as exc:
-            logging.error(str(exc)); sys.exit(1)
 
-    quality_scorer = None
-    if (args.quality_min_score is not None or args.keep_top_percent is not None
-            or args.quality_score_field):
-        from sanitizer_pro.scoring import make_scorer
-        try:
-            quality_scorer = make_scorer(args.quality_scorer, model=args.quality_model)
-        except (ConfigurationError, ImportError) as exc:
-            logging.error(str(exc)); sys.exit(1)
-        logging.info(f"Quality scorer ready: {quality_scorer.backend_name}")
-        if args.keep_top_percent is not None:
-            logging.info(f"--keep-top-percent {args.keep_top_percent}: surviving records "
-                         "are buffered in memory until end of input.")
+def _open_writer(args: argparse.Namespace, plan: IOPlan, appending: bool) -> Any:
+    if plan.no_output:
+        return contextlib.nullcontext(None)
+    if plan.split_spec:
+        return SplitWriter(args.output, plan.output_fmt, args.encoding, plan.split_spec,
+                           txt_fallback_field=args.txt_fallback_field, seed=args.seed)
+    if args.shard_size:
+        return ShardedWriter(args.output, plan.output_fmt, args.encoding, args.shard_size,
+                             txt_fallback_field=args.txt_fallback_field)
+    return StreamingWriter(args.output, plan.output_fmt, args.encoding,
+                           txt_fallback_field=args.txt_fallback_field,
+                           append=appending, durable=args.resume)
 
-    chat_validator = None
-    if args.validate_chat:
-        from sanitizer_pro.chat import ChatValidator, make_token_counter
-        if args.chat_max_tokens is not None and args.chat_max_tokens < 1:
-            logging.error("--chat-max-tokens must be >= 1."); sys.exit(1)
-        chat_validator = ChatValidator(
-            allowed_roles=str(args.chat_roles).split(','), lenient=args.chat_lenient,
-            max_tokens=args.chat_max_tokens,
-            token_counter=make_token_counter(args.tokenizer) if args.chat_max_tokens else None,
-        )
-        if not chat_validator.allowed_roles:
-            logging.error("--chat-roles must name at least one role."); sys.exit(1)
 
-    contamination_index = None
-    if args.decontaminate or args.decontam_refs:
-        from sanitizer_pro.decontam import build_index, resolve_benchmark_names
-        try:
-            contamination_index = build_index(
-                benchmarks=resolve_benchmark_names(args.decontaminate) if args.decontaminate else None,
-                ref_files=[p.strip() for p in args.decontam_refs.split(',') if p.strip()] if args.decontam_refs else None,
-                cache_dir=args.decontam_cache, ngram=args.decontam_ngram,
-                min_hits=args.decontam_min_hits, encoding=args.encoding,
-            )
-        except (ConfigurationError, ImportError) as exc:
-            logging.error(str(exc)); sys.exit(1)
-        except Exception as exc:
-            logging.error(f"Failed to build decontamination index: {exc}"); sys.exit(1)
+class _Checkpointer:
+    """Writes a consistent checkpoint every N input records (single process)."""
 
-    logging.info(f"Start: {args.input} ({input_fmt}) → {args.output} ({output_fmt}) | jobs={args.jobs}")
-    run_started = time.monotonic()
+    def __init__(self, args: argparse.Namespace, sanitizer: Sanitizer) -> None:
+        from sanitizer_pro.dedup import SQLiteDeduper
+        self.args, self.s = args, sanitizer
+        # Only a named SQLite DB survives the process, so only it is rolled back.
+        self.durable_dedup: Optional[SQLiteDeduper] = (
+            sanitizer.deduper if args.resume and args.dedup_db_path
+            and isinstance(sanitizer.deduper, SQLiteDeduper) else None)
 
-    no_output = args.dry_run or args.stats_only
-    try:
-        deduper = make_deduper(
-            args.dedup_backend, args.dedup_db_path, fuzzy=args.fuzzy_dedup,
-            fuzzy_threshold=args.fuzzy_threshold, semantic=args.semantic_dedup,
-            semantic_threshold=args.semantic_threshold, semantic_model=args.semantic_model,
-        ) if (args.deduplicate or args.fuzzy_dedup or args.semantic_dedup) else None
-    except ImportError as exc:
-        logging.error(str(exc)); sys.exit(1)
-    run_stats = RunStats.from_state(resume_stats) if resume_stats else RunStats()
-
-    from sanitizer_pro.dedup import SQLiteDeduper
-    durable_dedup = (isinstance(deduper, SQLiteDeduper) and bool(args.dedup_db_path)
-                     and args.resume)
-    if durable_dedup and resume_stats is not None:
-        if resume_dedup_mark is not None:
-            forgotten = deduper.rollback_to(resume_dedup_mark)
-            if forgotten:
-                logging.info(f"Dedup DB: forgot {forgotten:,} hashes recorded after the "
-                             "last checkpoint.")
-        else:
+    def rollback_dedup(self, mark: Optional[int]) -> None:
+        if self.durable_dedup is None:
+            return
+        if mark is None:
             logging.warning("Checkpoint has no dedup mark; hashes recorded after it may "
                             "drop records as false duplicates.")
+            return
+        forgotten = self.durable_dedup.rollback_to(mark)
+        if forgotten:
+            logging.info(f"Dedup DB: forgot {forgotten:,} hashes recorded after the last checkpoint.")
+
+    def maybe_save(self, writer: Any) -> None:
+        """Called only between records, so every counted record is written."""
+        if not self.args.resume or self.s.stats.total % self.args.checkpoint_interval != 0:
+            return
+        from sanitizer_pro.checkpoint import save_checkpoint
+        # Make output and dedup state durable *before* the checkpoint that
+        # references them: a crash in between leaves the previous checkpoint,
+        # whose smaller marks make resume discard the newer rows and hashes.
+        output_bytes = writer.durable_size() if writer is not None else None
+        dedup_mark = self.durable_dedup.high_water_mark() if self.durable_dedup else None
+        if self.s.deduper is not None and hasattr(self.s.deduper, 'flush'):
+            self.s.deduper.flush()
+        reg = self.s.pseudo_registry
+        save_checkpoint(self.args.output, input_path=self.args.input,
+                        records_read=self.s.stats.total, stats_state=self.s.stats.to_state(),
+                        pseudo_state=reg.to_state() if reg else None,
+                        output_bytes=output_bytes, dedup_mark=dedup_mark)
+
+
+def _skip(it: Iterator[Any], n: int) -> Iterator[Any]:
+    for i, rec in enumerate(it):
+        if i >= n:
+            yield rec
+
+
+def _progress(it: Iterable[Any], args: argparse.Namespace, desc: str) -> Iterable[Any]:
+    if TQDM_AVAILABLE and not args.no_progress and not args.quiet and args.input != _STDIN:
+        wrapped: Iterable[Any] = _tqdm(it, desc=desc, unit="rec", dynamic_ncols=True,
+                                       smoothing=0.1)
+        return wrapped
+    return it
+
+
+def _run_pipeline(args: argparse.Namespace, sanitizer: Sanitizer, records: Iterator[Any],
+                  writer: Any, ckpt: _Checkpointer) -> None:
+    def write(out: List[Dict[str, Any]]) -> None:
+        if writer is not None:
+            for rec in out:
+                writer.write(rec)
+
+    limit = args.dry_run_size if args.dry_run else None
+    if args.jobs == 1:
+        for record in _progress(records, args, "Sanitizing"):
+            if limit is not None and sanitizer.stats.total >= limit:
+                break
+            write(sanitizer.feed(record))
+            ckpt.maybe_save(writer)
+    else:
+        def dispatchable() -> Iterator[Dict[str, Any]]:
+            # Non-objects are counted here so `malformed` stays accurate.
+            for rec in records:
+                if isinstance(rec, dict):
+                    yield rec
+                else:
+                    sanitizer.stats.total += 1
+                    sanitizer.stats.malformed += 1
+
+        pool = multiprocessing.Pool(processes=args.jobs, initializer=_worker_init,
+                                    initargs=(sanitizer.config, args.log_level))
+        stopped_early = False
+        try:
+            results = pool.imap(_worker_fn, dispatchable(), chunksize=args.chunk_size)
+            for transformed, pii_counts in _progress(results, args, "Processing"):
+                if limit is not None and sanitizer.stats.total >= limit:
+                    stopped_early = True
+                    break
+                write(sanitizer.feed_transformed(transformed, pii_counts))
+        except BaseException:
+            stopped_early = True
+            raise
+        finally:
+            if stopped_early:
+                pool.terminate()
+            else:
+                pool.close()
+            pool.join()
+    write(sanitizer.finish())
+
+
+def _print_summary(args: argparse.Namespace, stats: RunStats) -> None:
+    if args.log_format == 'json':
+        # Keep stderr a clean JSON-lines stream: emit the summary as one record.
+        print(json.dumps({'event': 'complete', **stats.to_dict()}), file=sys.stderr)
+        return
+    total = stats.total
+    kept_pct = (stats.kept / total * 100) if total > 0 else 0.0
+    sep = '=' * 62
+    rows = [
+        ("Total records processed", total), ("Kept", None),
+        ("Filtered (quality)", stats.filtered_quality),
+        ("Filtered (language)", stats.filtered_lang),
+        ("Filtered (require)", stats.filtered_require),
+        ("Filtered (code)", stats.filtered_code),
+        ("Filtered (profanity)", stats.filtered_profanity),
+        ("Filtered (contaminated)", stats.filtered_contaminated),
+        ("Filtered (chat-invalid)", stats.filtered_chat),
+        ("Filtered (low score)", stats.filtered_low_score),
+        ("Deduplicated", stats.deduplicated), ("Malformed", stats.malformed),
+        ("Sampled out", stats.sampled_out),
+    ]
+    lines = [f"\n{sep}", f"SANITIZATION COMPLETE — v{__version__}{_mode_tag(args)}", sep]
+    for label, value in rows:
+        shown = f"{stats.kept:,}  ({kept_pct:.2f}%)" if value is None else f"{value:,}"
+        lines.append(f"{label:<24}: {shown}")
+    if stats.chat_invalid_reasons:
+        top = ', '.join(f"{k}={v}" for k, v in sorted(
+            stats.chat_invalid_reasons.items(), key=lambda x: -x[1])[:5])
+        lines.append(f"  chat-invalid breakdown: {top}")
+    lines.append(sep)
+    print('\n'.join(lines), file=sys.stderr)
+
+
+def _mode_tag(args: argparse.Namespace) -> str:
+    return ' [DRY RUN]' if args.dry_run else (' [STATS ONLY]' if args.stats_only else '')
+
+
+def _write_artifacts(args: argparse.Namespace, config: SanitizerConfig, plan: IOPlan,
+                     sanitizer: Sanitizer, duration: float) -> None:
+    if args.stats_file:
+        try:
+            Path(args.stats_file).write_text(
+                json.dumps({'version': __version__, **sanitizer.stats.to_dict()}, indent=2),
+                encoding='utf-8')
+        except Exception as exc:
+            logging.warning(f"Could not write stats file: {exc}")
+    if not args.report:
+        return
+    c = config
+    features = [name for enabled, name in [
+        (c.remove_pii, 'PII redaction' + (' + NER' if c.pii_ner else '')),
+        (c.redact_secrets, 'secrets redaction'),
+        (c.pii_pseudonymize, 'pseudonymization'),
+        (c.deduplicate, f'exact dedup ({c.dedup_backend})'),
+        (c.fuzzy_dedup, f'fuzzy dedup (t={c.fuzzy_threshold})'),
+        (c.semantic_dedup, f'semantic dedup (t={c.semantic_threshold})'),
+        (bool(c.decontaminate or c.decontam_refs),
+         'decontamination' + (f" ({','.join(c.decontaminate)})" if c.decontaminate else '')),
+        (c.validate_chat, 'chat validation'),
+        (sanitizer._scorer is not None, f'quality scoring ({c.quality_scorer})'),
+        (c.clean_html, 'HTML stripping'),
+        (bool(c.lang_filter), f"language filter ({','.join(c.lang_filter or [])})"),
+    ] if enabled]
+    meta = {
+        'Input': f"{args.input} ({plan.input_fmt})",
+        'Output': f"{args.output} ({plan.output_fmt}){_mode_tag(args)}",
+        'Profile': args.profile or '—',
+        'Active features': ', '.join(features) or 'none',
+        'Duration': f"{duration:.1f}s | jobs={args.jobs}",
+        'version': __version__,
+    }
+    try:
+        sanitizer.write_report(args.report, meta)
+        logging.info(f"Audit report written to {args.report}")
+    except Exception as exc:
+        logging.warning(f"Could not write audit report: {exc}")
+
+
+def main() -> None:
+    parser = build_parser()
+    args = parser.parse_args()
+    _print_info_and_exit(args, parser)
+    if args.input is None or args.output is None:
+        parser.error("--input and --output are required.")
+    _merge_settings(args, parser)
+    _setup_logging(args)
 
     try:
-        record_iter: Iterator[Dict[str, Any]] = read_records(
+        config = SanitizerConfig.from_namespace(args)
+        config.validate()
+        plan = _plan_io(args, config)
+        resume = _prepare_resume(args, config, plan)
+    except (CliError, ConfigurationError) as exc:
+        logging.error(str(exc)); sys.exit(1)
+    except Exception as exc:
+        logging.error(f"Failed to load auxiliary config: {exc}"); sys.exit(1)
+    for note in config.warnings():
+        logging.warning(note)
+    if args.report_raw_samples and args.report:
+        logging.warning("--report-raw-samples: the audit report will contain unredacted "
+                        "records (PII/secrets). Handle it like the raw input data.")
+
+    try:
+        sanitizer = Sanitizer(config, stats=resume.stats, pseudo_registry=resume.pseudo)
+    except (ConfigurationError, ImportError) as exc:
+        logging.error(str(exc)); sys.exit(1)
+    except Exception as exc:
+        logging.error(f"Failed to initialize the pipeline: {exc}"); sys.exit(1)
+    ckpt = _Checkpointer(args, sanitizer)
+    if resume.stats is not None:
+        ckpt.rollback_dedup(resume.dedup_mark)
+
+    logging.info(f"Start: {args.input} ({plan.input_fmt}) → {args.output} ({plan.output_fmt}) "
+                 f"| jobs={args.jobs}")
+    started = time.monotonic()
+    try:
+        records: Iterator[Any] = read_records(
             args.input, encoding=args.encoding, paragraph_mode=args.paragraph_mode,
             csv_delimiter=args.csv_delimiter, csv_no_header=args.csv_no_header,
-            csv_columns=args.csv_columns_list, excel_sheet=excel_sheet,
+            csv_columns=as_list(args.csv_columns), excel_sheet=plan.excel_sheet,
             excel_warn_mb=args.excel_warn_size,
-            input_format=None if is_hub_input else input_fmt,
-            json_path=args.json_path, hf_cache=args.hf_cache, yield_malformed=True
-        )
+            input_format=None if plan.is_hub_input else plan.input_fmt,
+            json_path=args.json_path, hf_cache=args.hf_cache, yield_malformed=True)
     except Exception as exc:
         logging.critical(f"Failed to open input: {exc}"); sys.exit(1)
-
-    if resume_skip:
-        def _skip_consumed(it: Iterator[Dict[str, Any]], n: int) -> Iterator[Dict[str, Any]]:
-            consumed = 0
-            for rec in it:
-                if consumed < n:
-                    consumed += 1
-                    continue
-                yield rec
-        record_iter = _skip_consumed(record_iter, resume_skip)
-
-    def _maybe_checkpoint(writer: Any) -> None:
-        """Called only between records, so the snapshot is consistent: every
-        record counted in `total` is fully handled and written."""
-        if not args.resume or run_stats.total % args.checkpoint_interval != 0:
-            return
-        from sanitizer_pro.checkpoint import rng_to_state, save_checkpoint
-        # Order matters: make output and dedup state durable *before* the
-        # checkpoint that references them. A crash in between leaves the
-        # previous checkpoint, whose (smaller) marks make resume discard the
-        # newer rows and hashes.
-        output_bytes = writer.durable_size() if writer is not None else None
-        dedup_mark = deduper.high_water_mark() if durable_dedup else None
-        if deduper is not None and hasattr(deduper, 'flush'):
-            deduper.flush()
-        save_checkpoint(args.output, input_path=args.input, records_read=run_stats.total,
-                        stats_state=run_stats.to_state(),
-                        pseudo_state=pseudo_registry.to_state() if pseudo_registry else None,
-                        output_bytes=output_bytes, dedup_mark=dedup_mark,
-                        rng_state=rng_to_state(random.getstate()))
-
-    use_progress = TQDM_AVAILABLE and not args.no_progress and not args.quiet and args.input != _STDIN
-
-    audit_samples = None
-    if args.report:
-        from sanitizer_pro.report import AuditSampleCollector
-        if args.report_raw_samples:
-            logging.warning("--report-raw-samples: the audit report will contain unredacted "
-                            "records (PII/secrets). Handle it like the raw input data.")
-        audit_samples = AuditSampleCollector(
-            raw=args.report_raw_samples,
-            redact=make_report_redactor(
-                args.remove_pii, args.redact_secrets, extra_pii=extra_pii,
-                ner_redactor=ner_redactor, max_depth=args.max_depth))
-
-    # (score, sanitized, quality_text, lang) survivors awaiting top-P% selection
-    topk_buffer: Optional[List[Tuple[Optional[float], Dict[str, Any], str, Optional[str]]]] = \
-        [] if args.keep_top_percent is not None else None
-
-    def _handle(sanitized: Optional[Dict[str, Any]], reason: Optional[FilterReason], quality_text: str, lang: Optional[str], writer: Any, original: Any = None) -> None:
-        if sanitized is None:
-            if reason == FilterReason.LANGUAGE: run_stats.filtered_lang += 1
-            elif reason == FilterReason.REQUIRE: run_stats.filtered_require += 1
-            elif reason == FilterReason.CODE: run_stats.filtered_code += 1
-            elif reason == FilterReason.PROFANITY: run_stats.filtered_profanity += 1
-            else: run_stats.filtered_quality += 1
-            if audit_samples is not None and original is not None:
-                audit_samples.add_dropped((reason or FilterReason.QUALITY).value, original)
-            return
-
-        if chat_validator is not None:
-            chat_reason = chat_validator.check(sanitized)
-            if chat_reason:
-                run_stats.filtered_chat += 1
-                run_stats.chat_invalid_reasons[chat_reason] = \
-                    run_stats.chat_invalid_reasons.get(chat_reason, 0) + 1
-                logging.debug(f"Chat validation rejected record: {chat_reason}")
-                if audit_samples is not None:
-                    audit_samples.add_dropped('chat', sanitized, redacted=True)
-                return
-
-        if contamination_index is not None and contamination_index.is_contaminated(
-                full_text_for_decontam(sanitized)):
-            run_stats.filtered_contaminated += 1
-            if audit_samples is not None:
-                audit_samples.add_dropped('contaminated', sanitized, redacted=True)
-            return
-
-        score: Optional[float] = None
-        if quality_scorer is not None:
-            score = quality_scorer.score(quality_text)
-            if args.quality_min_score is not None and score < args.quality_min_score:
-                run_stats.filtered_low_score += 1
-                if audit_samples is not None:
-                    audit_samples.add_dropped('low_score', sanitized, redacted=True)
-                return
-
-        if args.sample is not None and random.random() >= args.sample:
-            run_stats.sampled_out += 1
-            return
-
-        if deduper is not None:
-            if args.fuzzy_dedup or args.semantic_dedup:
-                if deduper.contains(quality_text):
-                    run_stats.deduplicated += 1
-                    return
-                deduper.add(quality_text)
-            else:
-                h = get_record_hash(sanitized, args.dedup_fields_list, args.dedup_normalize)
-                if deduper.contains(h):
-                    run_stats.deduplicated += 1
-                    return
-                deduper.add(h)
-
-        if topk_buffer is not None:
-            topk_buffer.append((score, sanitized, quality_text, lang))
-            return
-        _emit(score, sanitized, quality_text, lang, writer)
-
-    def _emit(score: Optional[float], sanitized: Dict[str, Any], quality_text: str,
-              lang: Optional[str], writer: Any) -> None:
-        if score is not None:
-            run_stats.record_score(score)
-            if args.quality_score_field:
-                sanitized[args.quality_score_field] = score
-        run_stats.record_kept(quality_text, lang=lang)
-        if writer is not None:
-            writer.write(sanitized)
-
-    def _finalize(writer: Any) -> None:
-        """Drain the --keep-top-percent buffer: emit the best P% in input order."""
-        if topk_buffer is None:
-            return
-        if not topk_buffer:
-            return
-        n_keep = max(1, round(len(topk_buffer) * args.keep_top_percent / 100))
-        ranked = sorted(range(len(topk_buffer)),
-                        key=lambda i: topk_buffer[i][0], reverse=True)
-        keep_idx = set(ranked[:n_keep])
-        run_stats.filtered_low_score += len(topk_buffer) - n_keep
-        for i, (score, sanitized, quality_text, lang) in enumerate(topk_buffer):
-            if i in keep_idx:
-                _emit(score, sanitized, quality_text, lang, writer)
-        topk_buffer.clear()
-
-    def _process(writer: Any) -> None:
-        if args.jobs > 1:
-            def _dispatchable() -> Iterator[Dict[str, Any]]:
-                # Filter non-dict records in the parent so `malformed` stays accurate.
-                for rec in record_iter:
-                    if isinstance(rec, dict):
-                        yield rec
-                    else:
-                        run_stats.total += 1
-                        run_stats.malformed += 1
-
-            pool = multiprocessing.Pool(
-                processes=args.jobs, initializer=_worker_init,
-                initargs=(args, extra_pii, lang_filter_set, field_ops, args.require_fields_list, args.text_fields_list)
-            )
-            stopped_early = False
-            try:
-                imap_iter = pool.imap(_worker_fn, _dispatchable(), chunksize=args.chunk_size)
-                if use_progress:
-                    imap_iter = _tqdm(imap_iter, desc="Processing", unit="rec", dynamic_ncols=True, smoothing=0.1)
-                for sanitized, reason, quality_text, lang, wcounts in imap_iter:
-                    run_stats.total += 1
-                    if args.dry_run and run_stats.total > args.dry_run_size:
-                        stopped_early = True
-                        break
-                    run_stats.merge_pii_counts(wcounts)
-                    _handle(sanitized, reason, quality_text, lang, writer)
-            except BaseException:
-                stopped_early = True
-                raise
-            finally:
-                if stopped_early:
-                    pool.terminate()
-                else:
-                    pool.close()
-                pool.join()
-            return
-
-        # Single-threaded
-        if use_progress:
-            record_iter_wrapped = _tqdm(record_iter, desc="Sanitizing", unit="rec", dynamic_ncols=True, smoothing=0.1)
-        else:
-            record_iter_wrapped = record_iter
-
-        for record in record_iter_wrapped:
-            run_stats.total += 1
-            if args.dry_run and run_stats.total > args.dry_run_size: break
-            if not isinstance(record, dict):
-                run_stats.malformed += 1
-                _maybe_checkpoint(writer)
-                continue
-            
-            pii_before = sum(run_stats.pii_counts.values())
-            sanitized, reason, quality_text, lang = sanitize_record(
-                record, args, text_fields=args.text_fields_list, extra_pii_patterns=extra_pii,
-                lang_filter=lang_filter_set, field_ops=field_ops, truncator=truncator,
-                pseudo_registry=pseudo_registry, require_fields=args.require_fields_list, quality_fn=quality_fn,
-                ner_redactor=ner_redactor, pii_counters=run_stats.pii_counts
-            )
-            if (audit_samples is not None and audit_samples.wants_pii_diffs
-                    and sanitized is not None
-                    and sum(run_stats.pii_counts.values()) > pii_before):
-                audit_samples.add_pii_diff(record, sanitized)
-            _handle(sanitized, reason, quality_text, lang, writer, original=record)
-            _maybe_checkpoint(writer)
-
-    def _run(writer: Any) -> None:
-        _process(writer=writer)
-        _finalize(writer)
+    if resume.skip:
+        records = _skip(records, resume.skip)
 
     writer_ctx: Any = None
     try:
-        if no_output:
-            _run(writer=None)
-        elif split_spec:
-            writer_ctx = SplitWriter(args.output, output_fmt, args.encoding, split_spec, txt_fallback_field=args.txt_fallback_field)
-            with writer_ctx as writer: _run(writer=writer)
-        elif args.shard_size:
-            writer_ctx = ShardedWriter(args.output, output_fmt, args.encoding, args.shard_size, txt_fallback_field=args.txt_fallback_field)
-            with writer_ctx as writer: _run(writer=writer)
-        else:
-            writer_ctx = StreamingWriter(args.output, output_fmt, args.encoding,
-                                         txt_fallback_field=args.txt_fallback_field,
-                                         append=resume_stats is not None,
-                                         durable=args.resume)
-            with writer_ctx as writer: _run(writer=writer)
+        writer_ctx = _open_writer(args, plan, appending=resume.stats is not None)
+        with writer_ctx as writer:
+            _run_pipeline(args, sanitizer, records, writer, ckpt)
         if args.resume:
             from sanitizer_pro.checkpoint import clear_checkpoint
             clear_checkpoint(args.output)
@@ -849,83 +742,16 @@ def main() -> None:
         logging.critical(f"Fatal error: {exc}", exc_info=True)
         sys.exit(1)
     finally:
-        if deduper is not None: deduper.close()
-        if pseudo_registry is not None and args.pseudo_map_file:
+        sanitizer.close()
+        if sanitizer.pseudo_registry is not None and args.pseudo_map_file:
             try:
-                Path(args.pseudo_map_file).write_text(json.dumps(pseudo_registry.to_dict(), indent=2, ensure_ascii=False), encoding='utf-8')
+                sanitizer.export_pseudonym_map(args.pseudo_map_file)
             except Exception as exc:
                 logging.warning(f"Could not write pseudonym map: {exc}")
 
-    # Final Report
-    total = run_stats.total
-    kept = run_stats.kept
-    kept_pct = (kept / total * 100) if total > 0 else 0.0
-    sep = '=' * 62
-    mode_tag = ' [DRY RUN]' if args.dry_run else (' [STATS ONLY]' if args.stats_only else '')
-    
-    lines = [
-        f"\n{sep}", f"SANITIZATION COMPLETE — v3.0{mode_tag}", sep,
-        f"Total records processed : {total:,}",
-        f"Kept                    : {kept:,}  ({kept_pct:.2f}%)",
-        f"Filtered (quality)      : {run_stats.filtered_quality:,}",
-        f"Filtered (language)     : {run_stats.filtered_lang:,}",
-        f"Filtered (require)      : {run_stats.filtered_require:,}",
-        f"Filtered (code)         : {run_stats.filtered_code:,}",
-        f"Filtered (profanity)    : {run_stats.filtered_profanity:,}",
-        f"Filtered (contaminated) : {run_stats.filtered_contaminated:,}",
-        f"Filtered (chat-invalid) : {run_stats.filtered_chat:,}",
-        f"Filtered (low score)    : {run_stats.filtered_low_score:,}",
-        f"Deduplicated            : {run_stats.deduplicated:,}",
-        f"Malformed               : {run_stats.malformed:,}",
-        f"Sampled out             : {run_stats.sampled_out:,}",
-        sep
-    ]
-    if run_stats.chat_invalid_reasons:
-        top = ', '.join(f"{k}={v}" for k, v in sorted(
-            run_stats.chat_invalid_reasons.items(), key=lambda x: -x[1])[:5])
-        lines.insert(-1, f"  chat-invalid breakdown: {top}")
-    if args.log_format == 'json':
-        # Keep stderr a clean JSON-lines stream: emit the summary as one record.
-        print(json.dumps({'event': 'complete', **run_stats.to_dict()}), file=sys.stderr)
-    else:
-        print('\n'.join(lines), file=sys.stderr)
+    _print_summary(args, sanitizer.stats)
+    _write_artifacts(args, config, plan, sanitizer, time.monotonic() - started)
 
-    if args.stats_file:
-        try:
-            Path(args.stats_file).write_text(json.dumps({'version': '3.0', **run_stats.to_dict()}, indent=2), encoding='utf-8')
-        except Exception as exc:
-            logging.warning(f"Could not write stats file: {exc}")
-
-    if args.report:
-        from sanitizer_pro.report import generate_report_html
-        features = [name for enabled, name in [
-            (args.remove_pii, 'PII redaction' + (' + NER' if args.pii_ner else '')),
-            (args.redact_secrets, 'secrets redaction'),
-            (args.pii_pseudonymize, 'pseudonymization'),
-            (args.deduplicate, f'exact dedup ({args.dedup_backend})'),
-            (args.fuzzy_dedup, f'fuzzy dedup (t={args.fuzzy_threshold})'),
-            (args.semantic_dedup, f'semantic dedup (t={args.semantic_threshold})'),
-            (bool(args.decontaminate or args.decontam_refs),
-             'decontamination' + (f' ({args.decontaminate})' if args.decontaminate else '')),
-            (args.validate_chat, 'chat validation'),
-            (quality_scorer is not None, f'quality scoring ({args.quality_scorer})'),
-            (args.clean_html, 'HTML stripping'),
-            (bool(lang_filter_set), f'language filter ({args.lang_filter})'),
-        ] if enabled]
-        meta = {
-            'Input': f"{args.input} ({input_fmt})",
-            'Output': f"{args.output} ({output_fmt}){mode_tag}",
-            'Profile': args.profile or '—',
-            'Active features': ', '.join(features) or 'none',
-            'Duration': f"{time.monotonic() - run_started:.1f}s | jobs={args.jobs}",
-            'version': '3.0',
-        }
-        try:
-            Path(args.report).write_text(
-                generate_report_html(run_stats.to_dict(), audit_samples, meta), encoding='utf-8')
-            logging.info(f"Audit report written to {args.report}")
-        except Exception as exc:
-            logging.warning(f"Could not write audit report: {exc}")
 
 if __name__ == "__main__":
     main()

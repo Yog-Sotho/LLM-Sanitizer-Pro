@@ -12,15 +12,15 @@ from sanitizer_pro.utils import InputFormatError, smart_open, _STDIN
 try:
     import ijson
 except ImportError:
-    ijson = None  # type: ignore[assignment]
+    ijson = None
 try:
     import pandas as pd
 except ImportError:
-    pd = None  # type: ignore[assignment]
+    pd = None
 try:
     import pyarrow.parquet as pq
 except ImportError:
-    pq = None  # type: ignore[assignment]
+    pq = None
 
 # Large text fields (e.g. scraped documents) easily exceed csv's 128 KiB default.
 csv.field_size_limit(min(2**31 - 1, 512 * 1024 * 1024))

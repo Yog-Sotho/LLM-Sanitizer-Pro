@@ -16,7 +16,7 @@ behavior of the regex-based redactor.
 """
 import logging
 from dataclasses import dataclass
-from typing import Callable, List, Optional, Sequence
+from typing import Callable, Dict, List, Optional, Sequence, Tuple
 
 from sanitizer_pro.pii import PseudoRegistry
 from sanitizer_pro.utils import ConfigurationError
@@ -114,7 +114,7 @@ class NERRedactor:
                      f"(entities: {', '.join(sorted(self.entities))})")
 
     @staticmethod
-    def _load_backend(backend: str, model: Optional[str]):
+    def _load_backend(backend: str, model: Optional[str]) -> Tuple[Detector, str]:
         if backend not in ('auto', 'spacy', 'transformers'):
             raise ConfigurationError(f"Unknown NER backend '{backend}'.")
         errors = []
@@ -142,7 +142,7 @@ class NERRedactor:
 
     def redact(self, text: str, mask: bool = False,
                pseudo_registry: Optional[PseudoRegistry] = None,
-               counters: Optional[dict] = None) -> str:
+               counters: Optional[Dict[str, int]] = None) -> str:
         if not text:
             return text
         spans = [s for s in self._detect(text) if s.kind in self.entities]

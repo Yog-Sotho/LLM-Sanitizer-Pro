@@ -4,7 +4,17 @@ import multiprocessing
 import os
 import sqlite3
 import tempfile
-from typing import List, Optional, Set
+from typing import Any, Callable, Dict, Iterator, List, Optional, Protocol, Set, Tuple
+
+
+class Deduper(Protocol):
+    """What the pipeline needs from a dedup backend; keys are hashes or texts."""
+
+    def contains(self, key: str) -> bool: ...
+
+    def add(self, key: str) -> None: ...
+
+    def close(self) -> None: ...
 
 
 class MemoryDeduper:
@@ -31,7 +41,7 @@ class SQLiteDeduper:
 
     def __init__(self, db_path: Optional[str] = None, batch_size: int = 5000) -> None:
         self.batch_size = batch_size
-        self.buffer: List[tuple] = []
+        self.buffer: List[Tuple[str]] = []
         self._pending: Set[str] = set()
         self._tmp_path: Optional[str] = None
 
@@ -166,7 +176,7 @@ class SemanticDeduper:
     _BAND_BITS = 8
 
     def __init__(self, threshold: float = 0.9, model: str = 'minishlab/potion-base-8M',
-                 _embed_fn=None) -> None:
+                 _embed_fn: Optional[Callable[[str], Any]] = None) -> None:
         try:
             import numpy as np
         except ImportError:
@@ -182,12 +192,12 @@ class SemanticDeduper:
                 raise ImportError("Semantic dedup requires: pip install model2vec") from None
             m = StaticModel.from_pretrained(model)
             self._embed_raw = lambda text: m.encode([text])[0]
-        self._planes = None  # lazily sized to the embedding dim
-        self._vectors: List = []
-        self._buckets: dict = {}
-        self._last: Optional[tuple] = None  # (text, vector, signature) cache
+        self._planes: Any = None  # lazily sized to the embedding dim
+        self._vectors: List[Any] = []
+        self._buckets: Dict[Tuple[int, int], List[int]] = {}
+        self._last: Optional[Tuple[str, Any, int]] = None  # (text, vector, signature) cache
 
-    def _embed(self, text: str):
+    def _embed(self, text: str) -> Tuple[Any, int]:
         if self._last is not None and self._last[0] == text:
             return self._last[1], self._last[2]
         np = self._np
@@ -202,7 +212,7 @@ class SemanticDeduper:
         self._last = (text, v, sig)
         return v, sig
 
-    def _bands(self, sig: int):
+    def _bands(self, sig: int) -> Iterator[Tuple[int, int]]:
         for band in range(self._NUM_BITS // self._BAND_BITS):
             yield band, (sig >> (band * self._BAND_BITS)) & ((1 << self._BAND_BITS) - 1)
 
@@ -211,7 +221,7 @@ class SemanticDeduper:
             self._embed(text)  # warm the cache for the add() that may follow
             return False
         v, sig = self._embed(text)
-        candidates = set()
+        candidates: Set[int] = set()
         for key in self._bands(sig):
             candidates.update(self._buckets.get(key, ()))
         for idx in candidates:
@@ -234,7 +244,7 @@ class SemanticDeduper:
 def make_deduper(backend: str, db_path: Optional[str] = None, fuzzy: bool = False,
                  fuzzy_threshold: float = 0.8, semantic: bool = False,
                  semantic_threshold: float = 0.9,
-                 semantic_model: str = 'minishlab/potion-base-8M'):
+                 semantic_model: str = 'minishlab/potion-base-8M') -> Deduper:
     if semantic:
         return SemanticDeduper(threshold=semantic_threshold, model=semantic_model)
     if fuzzy:

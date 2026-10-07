@@ -19,12 +19,12 @@ import json
 import logging
 import os
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 
 from sanitizer_pro.utils import ConfigurationError
 
 CHECKPOINT_VERSION = 2
-_READABLE_VERSIONS = (1, 2)  # v1 lacks output_bytes / dedup_mark / rng
+_READABLE_VERSIONS = (1, 2)  # v1 lacks output_bytes / dedup_mark
 
 
 def checkpoint_path(output_path: str) -> str:
@@ -44,8 +44,7 @@ def save_checkpoint(output_path: str, *, input_path: str, records_read: int,
                     stats_state: Dict[str, Any],
                     pseudo_state: Optional[Dict[str, Any]] = None,
                     output_bytes: Optional[int] = None,
-                    dedup_mark: Optional[int] = None,
-                    rng_state: Optional[List[Any]] = None) -> None:
+                    dedup_mark: Optional[int] = None) -> None:
     payload = {
         'version': CHECKPOINT_VERSION,
         'input': input_fingerprint(input_path),
@@ -54,7 +53,6 @@ def save_checkpoint(output_path: str, *, input_path: str, records_read: int,
         'pseudo': pseudo_state,
         'output_bytes': output_bytes,
         'dedup_mark': dedup_mark,
-        'rng': rng_state,
     }
     path = checkpoint_path(output_path)
     tmp = path + '.tmp'
@@ -69,6 +67,8 @@ def load_checkpoint(output_path: str, input_path: str) -> Optional[Dict[str, Any
         return None
     try:
         payload = json.loads(Path(path).read_text(encoding='utf-8'))
+        if not isinstance(payload, dict):
+            raise ValueError("not a JSON object")
     except Exception as exc:
         raise ConfigurationError(f"Corrupt checkpoint {path}: {exc}. "
                                  "Delete it to start fresh.") from None
@@ -101,17 +101,6 @@ def truncate_output_to_checkpoint(output_path: str, output_bytes: Optional[int])
     if size > output_bytes:
         os.truncate(output_path, output_bytes)
     return size - output_bytes
-
-
-def rng_to_state(state: Any) -> List[Any]:
-    """random.getstate() as JSON-serializable lists."""
-    version, internal, gauss = state
-    return [version, list(internal), gauss]
-
-
-def rng_from_state(state: List[Any]) -> Any:
-    version, internal, gauss = state
-    return (version, tuple(internal), gauss)
 
 
 def clear_checkpoint(output_path: str) -> None:

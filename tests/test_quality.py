@@ -1,16 +1,15 @@
 """Tests for quality scoring and content filtering."""
-import argparse
-
 from sanitizer_pro.quality import (
     _check_quality_reason, contains_profanity, extract_text_for_quality, is_code_heuristic,
 )
+from sanitizer_pro.settings import SanitizerConfig
 
 
-def make_args(**overrides) -> argparse.Namespace:
+def make_args(**overrides) -> SanitizerConfig:
     base = dict(min_chars=10, max_chars=1000, min_words=3,
                 min_ascii_ratio=0.5, min_unique_ratio=0.2, reject_allcaps=False)
     base.update(overrides)
-    return argparse.Namespace(**base)
+    return SanitizerConfig(**base)
 
 
 class TestQualityChecks:

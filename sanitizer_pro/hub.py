@@ -92,7 +92,7 @@ def http_get(url: str, timeout: float = 300.0) -> bytes:
     for attempt in range(_ATTEMPTS):
         try:
             with _open(url, timeout) as resp:
-                return resp.read()
+                return bytes(resp.read())
         except Exception as exc:
             delay = _retry_delay(exc, attempt)
             if delay is None:
@@ -136,7 +136,10 @@ def http_download(url: str, dest: Path, timeout: float = 300.0) -> None:
 def list_parquet(repo: str) -> Dict[str, Any]:
     """Return the Hub's parquet map for a dataset: {config: {split: [urls]}}."""
     try:
-        return json.loads(http_get(_HF_PARQUET_API.format(repo=repo), timeout=60.0))
+        data = json.loads(http_get(_HF_PARQUET_API.format(repo=repo), timeout=60.0))
+        if not isinstance(data, dict):
+            raise ValueError("unexpected response (not a JSON object)")
+        return data
     except Exception as exc:
         raise ConfigurationError(
             f"Could not list parquet files for '{repo}' on the Hugging Face Hub: {exc}. "
@@ -187,7 +190,7 @@ def resolve_parquet_urls(ref: HFDatasetRef) -> List[str]:
     urls = splits[ref.split]
     if not urls:
         raise ConfigurationError(f"No parquet files listed for {ref}.")
-    return urls
+    return [str(u) for u in urls]
 
 
 def download_parquet(ref: HFDatasetRef, cache_dir: Optional[str] = None,
