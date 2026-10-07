@@ -1,6 +1,9 @@
 """PII detection, masking, pseudonymization, and safe HTML stripping."""
+import hashlib
+import hmac
 import html
 import ipaddress
+import logging
 import re
 import unicodedata
 from typing import Any, Callable, Dict, FrozenSet, List, NamedTuple, Optional, Set, Tuple
@@ -408,7 +411,15 @@ _MASK_FN: Dict[str, Callable[[re.Match[str]], str]] = {
 }
 
 class PseudoRegistry:
-    """Maps real PII values to stable pseudonyms within a run."""
+    """Maps real PII values to stable pseudonyms.
+
+    Without a key, pseudonyms are numbered in order of first appearance
+    (Person_0001, Person_0002, ...): stable within one process. With a
+    `key`, the number is derived from HMAC-SHA256(key, kind, value): every
+    worker process and every run with the same key gives a value the same
+    pseudonym, without sharing state. Keyed numbers are 48-bit (IPv4: 24
+    bits, to stay inside 10.0.0.0/8), so with very many distinct values
+    two can share a pseudonym; that is logged when it happens here."""
     _TEMPLATES: Dict[str, str] = {
         'email': 'email_{n:04d}@redacted.local', 'phone': 'phone_{n:04d}',
         'card': 'card_{n:04d}', 'ssn': '000-00-{n:04d}', 'iban': 'IBAN_{n:04d}',
@@ -419,10 +430,17 @@ class PseudoRegistry:
         'credential': 'CREDENTIAL_{n:04d}',
     }
 
-    def __init__(self) -> None:
+    def __init__(self, key: Optional[str] = None, track_new: bool = False) -> None:
         self._map: Dict[str, str] = {}
         self._counts: Dict[str, int] = {}
         self._templates: Dict[str, str] = dict(self._TEMPLATES)
+        self._key = key.encode('utf-8') if key else None
+        self._issued: Dict[str, str] = {}            # keyed mode: pseudonym -> value
+        self._new: Optional[List[Tuple[str, str]]] = [] if track_new else None
+
+    @property
+    def keyed(self) -> bool:
+        return self._key is not None
 
     def add_templates(self, templates: Dict[str, str]) -> None:
         """Name additional kinds (e.g. secret types) without overriding existing ones."""
@@ -432,15 +450,37 @@ class PseudoRegistry:
     def get_or_create(self, value: str, kind: str) -> str:
         if value in self._map:
             return self._map[value]
-        n = self._counts.get(kind, 0) + 1
-        self._counts[kind] = n
+        if self._key is not None:
+            digest = hmac.new(self._key, f"{kind}\x00{value}".encode('utf-8'),
+                              hashlib.sha256).digest()
+            n = int.from_bytes(digest[:3] if kind == 'ip' else digest[:6], 'big')
+        else:
+            n = self._counts.get(kind, 0) + 1
+            self._counts[kind] = n
         if kind == 'ip':
             # A valid address in 10/8 (the old '0.0.0.{n}' broke past n=255).
             pseudo = f"10.{(n >> 16) & 255}.{(n >> 8) & 255}.{n & 255}"
         else:
             pseudo = self._templates.get(kind, 'pii_{n:04d}').format(n=n)
+        if self._key is not None:
+            other = self._issued.setdefault(pseudo, value)
+            if other != value:
+                logging.warning(f"Pseudonym collision: two distinct {kind} values map to "
+                                f"{pseudo} (keyed pseudonyms are 48-bit; IPv4 24-bit).")
         self._map[value] = pseudo
+        if self._new is not None:
+            self._new.append((value, pseudo))
         return pseudo
+
+    def drain_new(self) -> List[Tuple[str, str]]:
+        """Mappings created since the last call (track_new=True): workers
+        send these to the parent, which merges them for the map file."""
+        new, self._new = (self._new or []), ([] if self._new is not None else None)
+        return new
+
+    def merge(self, pairs: List[Tuple[str, str]]) -> None:
+        for value, pseudo in pairs:
+            self._map.setdefault(value, pseudo)
 
     def to_dict(self) -> Dict[str, str]:
         return dict(self._map)
@@ -449,8 +489,9 @@ class PseudoRegistry:
         return {'map': dict(self._map), 'counts': dict(self._counts)}
 
     @classmethod
-    def from_state(cls, state: Dict[str, Dict[str, Any]]) -> 'PseudoRegistry':
-        reg = cls()
+    def from_state(cls, state: Dict[str, Dict[str, Any]],
+                   key: Optional[str] = None) -> 'PseudoRegistry':
+        reg = cls(key=key)
         reg._map = dict(state.get('map', {}))
         reg._counts = dict(state.get('counts', {}))
         return reg

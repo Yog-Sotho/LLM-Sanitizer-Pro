@@ -76,7 +76,7 @@ class Sanitizer:
         c = self.config
         self.stats = stats if stats is not None else RunStats()
         if pseudo_registry is None and c.pii_pseudonymize:
-            pseudo_registry = PseudoRegistry()
+            pseudo_registry = PseudoRegistry(key=c.pseudo_key)
         self.pseudo_registry = pseudo_registry
         self.transformer = RecordTransformer(c)
 

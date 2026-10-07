@@ -7,7 +7,7 @@ directly. Field names match the CLI flags (``--min-chars`` -> ``min_chars``).
 """
 import argparse
 import re
-from dataclasses import dataclass, fields
+from dataclasses import dataclass, field, fields
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 from sanitizer_pro.utils import _MAX_DEPTH_DEFAULT, ConfigurationError
@@ -31,6 +31,9 @@ class SanitizerConfig:
     remove_pii: bool = False
     pii_mask: bool = False
     pii_pseudonymize: bool = False
+    # HMAC key for pseudonyms that are stable across worker processes and runs
+    # (kept out of repr so it never lands in logs).
+    pseudo_key: Optional[str] = field(default=None, repr=False)
     pii_ner: bool = False
     pii_ner_backend: str = 'auto'
     pii_ner_entities: Tuple[str, ...] = ('person',)

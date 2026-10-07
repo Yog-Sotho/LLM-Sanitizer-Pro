@@ -6,6 +6,7 @@ import logging
 import multiprocessing
 import os
 import sys
+import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -21,7 +22,9 @@ except ImportError:
 from sanitizer_pro import __version__
 from sanitizer_pro.api import Sanitizer
 from sanitizer_pro.config import apply_config_to_args, collect_explicit_args, load_config_file
-from sanitizer_pro.io.sources import chunkable, expand_inputs, is_multi_input, iter_files, jsonl_chunks
+from sanitizer_pro.io.sources import (
+    Chunk, chunkable, expand_inputs, is_multi_input, iter_files, jsonl_chunks,
+)
 from sanitizer_pro.langid import LANG_BACKENDS
 from sanitizer_pro.io.writers import ShardedWriter, SplitWriter, StreamingWriter, parse_split_spec
 from sanitizer_pro.pii import PseudoRegistry
@@ -32,7 +35,7 @@ from sanitizer_pro.settings import (
 )
 from sanitizer_pro.stats import RunStats
 from sanitizer_pro.utils import _EXCEL_WARN_MB_DEFAULT, _STDIN, _STDOUT, ConfigurationError, resolve_fmt
-from sanitizer_pro.worker import _worker_chunk, _worker_fn, _worker_init
+from sanitizer_pro.worker import WorkerResult, _worker_chunk, _worker_fn, _worker_init
 
 # =============================================================================
 # Constants
@@ -208,8 +211,17 @@ def build_parser() -> argparse.ArgumentParser:
     fg.add_argument('--dedup-db-path', default=None, metavar='PATH')
     fg.add_argument('--remove-pii', action='store_true')
     fg.add_argument('--pii-mask', action='store_true')
-    fg.add_argument('--pii-pseudonymize', action='store_true')
-    fg.add_argument('--pseudo-map-file', default=None, metavar='PATH')
+    fg.add_argument('--pii-pseudonymize', action='store_true',
+                    help='Replace PII with stable pseudonyms (Person_0001, email_0002@…) '
+                         'instead of [PII_…] tokens.')
+    fg.add_argument('--pseudo-key', default=None, metavar='KEY',
+                    help='Secret for keyed pseudonyms: the same value gets the same '
+                         'pseudonym in every run and worker that uses the key. Prefer the '
+                         'SANITIZE_PSEUDO_KEY environment variable (command lines are '
+                         'visible to other users). With --jobs > 1 and no key, a random '
+                         'per-run key is used.')
+    fg.add_argument('--pseudo-map-file', default=None, metavar='PATH',
+                    help='Write the original -> pseudonym map (sensitive) to PATH.')
     fg.add_argument('--pii-patterns-file', default=None, metavar='PATH')
     fg.add_argument('--pii-ner', action='store_true',
                     help='Also detect PII with a named-entity model (person names by default). '
@@ -416,6 +428,20 @@ def _merge_settings(args: argparse.Namespace, parser: argparse.ArgumentParser) -
         args.log_level = 'DEBUG'
 
 
+def _resolve_pseudo_key(args: argparse.Namespace, config: SanitizerConfig) -> None:
+    """--pseudo-key, else $SANITIZE_PSEUDO_KEY; with --jobs > 1 and neither,
+    a random key so all workers agree within this run."""
+    if not config.pii_pseudonymize or config.pseudo_key:
+        return
+    config.pseudo_key = os.environ.get('SANITIZE_PSEUDO_KEY') or None
+    if config.pseudo_key is None and args.jobs > 1:
+        import secrets
+        config.pseudo_key = secrets.token_hex(32)
+        logging.info("--pii-pseudonymize with --jobs > 1: using a random per-run key. Set "
+                     "SANITIZE_PSEUDO_KEY (or --pseudo-key) for pseudonyms that are stable "
+                     "across runs.")
+
+
 def _setup_logging(args: argparse.Namespace) -> None:
     eff_level = 'WARNING' if args.quiet else args.log_level
     handler = logging.StreamHandler(sys.stderr)
@@ -434,8 +460,6 @@ def _plan_io(args: argparse.Namespace, config: SanitizerConfig) -> IOPlan:
     """Validate CLI-only options and resolve input/output formats."""
     if args.jobs < 1:
         raise CliError("--jobs must be >= 1.")
-    if config.pii_pseudonymize and args.jobs > 1:
-        raise CliError("--pii-pseudonymize is not supported with --jobs > 1.")
     if args.shard_size is not None and args.shard_size < 1:
         raise CliError("--shard-size must be >= 1.")
     split_spec = None
@@ -518,7 +542,8 @@ def _prepare_resume(args: argparse.Namespace, config: SanitizerConfig, plan: IOP
     warn_about_volatile_state(args)
     state = ResumeState(skip=int(ckpt['records_read']),
                         stats=RunStats.from_state(ckpt['stats']),
-                        pseudo=PseudoRegistry.from_state(ckpt['pseudo']) if ckpt.get('pseudo') else None,
+                        pseudo=(PseudoRegistry.from_state(ckpt['pseudo'], key=config.pseudo_key)
+                                if ckpt.get('pseudo') else None),
                         dedup_mark=ckpt.get('dedup_mark'))
     logging.info(f"Resuming from checkpoint: skipping {state.skip:,} already-processed "
                  "input records, appending to output.")
@@ -609,78 +634,105 @@ def _run_pipeline(args: argparse.Namespace, sanitizer: Sanitizer, records: Itera
             write(sanitizer.feed(record))
             ckpt.maybe_save(writer)
     elif plan is not None and chunkable(plan.files, resolve_fmt('', args.input_format) or None):
-        _run_chunked(args, sanitizer, plan.files, write, limit)
+        _run_parallel(args, sanitizer, write, limit, chunks=list(jsonl_chunks(plan.files)))
     else:
-        def dispatchable() -> Iterator[Dict[str, Any]]:
-            # Non-objects are counted here so `malformed` stays accurate.
-            for rec in records:
-                if isinstance(rec, dict):
-                    yield rec
-                else:
-                    sanitizer.stats.total += 1
-                    sanitizer.stats.malformed += 1
-
-        pool = multiprocessing.Pool(processes=args.jobs, initializer=_worker_init,
-                                    initargs=(sanitizer.config, args.log_level, args.encoding))
-        stopped_early = False
-        try:
-            results = pool.imap(_worker_fn, dispatchable(), chunksize=args.chunk_size)
-            for transformed, pii_counts in _progress(results, args, "Processing"):
-                if limit is not None and sanitizer.stats.total >= limit:
-                    stopped_early = True
-                    break
-                write(sanitizer.feed_transformed(transformed, pii_counts))
-        except BaseException:
-            stopped_early = True
-            raise
-        finally:
-            if stopped_early:
-                pool.terminate()
-            else:
-                pool.close()
-            pool.join()
+        _run_parallel(args, sanitizer, write, limit, records=records)
     write(sanitizer.finish())
 
 
-def _run_chunked(args: argparse.Namespace, sanitizer: Sanitizer, files: List[str],
-                 write: Any, limit: Optional[int]) -> None:
-    """--jobs N on plain JSONL files: workers read and transform byte-range
-    chunks themselves; results come back in chunk order, so the output is
-    identical to a single-process run."""
+class _Window:
+    """Bounds the tasks in flight. Pool.imap's feeder thread otherwise drains
+    the whole input into memory whenever the parent is the slower side.
+    close() unblocks the feeder so an early stop cannot hang."""
+
+    def __init__(self, size: int) -> None:
+        self._slots = threading.Semaphore(size)
+        self._closed = False
+
+    def feed(self, items: Iterable[Any]) -> Iterator[Any]:
+        for item in items:
+            while not self._slots.acquire(timeout=0.2):
+                if self._closed:
+                    return
+            if self._closed:
+                return
+            yield item
+
+    def done(self) -> None:
+        self._slots.release()
+
+    def close(self) -> None:
+        self._closed = True
+
+
+def _run_parallel(args: argparse.Namespace, sanitizer: Sanitizer, write: Any,
+                  limit: Optional[int], *, records: Optional[Iterator[Any]] = None,
+                  chunks: Optional[List[Chunk]] = None) -> None:
+    """--jobs N: workers run the per-record stage; this process consumes their
+    results in input order and runs the stateful stages, so the output and
+    stats are identical to a single-process run.
+
+    With `chunks` (plain JSONL files) workers also read and parse the input;
+    otherwise this process reads and sends records."""
     stats = sanitizer.stats
-    pool = multiprocessing.Pool(processes=args.jobs, initializer=_worker_init,
-                                initargs=(sanitizer.config, args.log_level, args.encoding))
+    want_samples = bool(args.report)
+    pool = multiprocessing.Pool(
+        processes=args.jobs, initializer=_worker_init,
+        initargs=(sanitizer.config, args.log_level, args.encoding, want_samples))
     stopped_early = False
     bad = 0
+    window = _Window(args.jobs * 4 if chunks is not None else args.jobs * args.chunk_size * 4)
+    progress: Any = None
+
+    def absorb(result: WorkerResult) -> bool:
+        """Feed one worker result; False once the --dry-run limit is reached."""
+        nonlocal bad
+        if limit is not None and stats.total >= limit:
+            return False
+        if result.samples:
+            sanitizer.audit_samples.merge(result.samples)
+        if result.pseudonyms and sanitizer.pseudo_registry is not None:
+            sanitizer.pseudo_registry.merge(list(result.pseudonyms))
+        if result.transformed is None:
+            stats.total += 1
+            stats.malformed += 1
+            bad += 1
+            if chunks is not None and bad <= 5:   # (the parent's reader logs its own)
+                logging.warning(f"Skipping malformed input: {result.problem}")
+            return True
+        write(sanitizer.feed_transformed(result.transformed, result.pii_counts))
+        return True
+
     try:
-        progress = _progress_bar(args, sum(os.path.getsize(f) for f in files))
-        for chunk, items in zip(jsonl_chunks(files),
-                                pool.imap(_worker_chunk, jsonl_chunks(files))):
-            for transformed, pii_counts, problem in items:
-                if limit is not None and stats.total >= limit:
+        if chunks is not None:
+            progress = _progress_bar(args, sum(c.end - c.start for c in chunks))
+            for chunk, results in zip(chunks, pool.imap(_worker_chunk, window.feed(chunks))):
+                window.done()
+                for result in results:
+                    if not absorb(result):
+                        stopped_early = True
+                        break
+                if progress is not None:
+                    progress.update(chunk.end - chunk.start)
+                if stopped_early:
+                    break
+            if bad > 5:
+                logging.warning(f"Skipped {bad} malformed input records in total.")
+        else:
+            assert records is not None
+            stream = pool.imap(_worker_fn, window.feed(records), chunksize=args.chunk_size)
+            for result in _progress(stream, args, "Processing"):
+                window.done()
+                if not absorb(result):
                     stopped_early = True
                     break
-                if problem is not None:
-                    stats.total += 1
-                    stats.malformed += 1
-                    bad += 1
-                    if bad <= 5:
-                        logging.warning(f"Skipping malformed input: {problem}")
-                    continue
-                assert transformed is not None
-                write(sanitizer.feed_transformed(transformed, pii_counts))
-            if progress is not None:
-                progress.update(chunk.end - chunk.start)
-            if stopped_early:
-                break
-        if progress is not None:
-            progress.close()
-        if bad > 5:
-            logging.warning(f"Skipped {bad} malformed input records in total.")
     except BaseException:
         stopped_early = True
         raise
     finally:
+        if progress is not None:
+            progress.close()
+        window.close()
         if stopped_early:
             pool.terminate()
         else:
@@ -795,6 +847,7 @@ def main() -> None:
 
     try:
         config = SanitizerConfig.from_namespace(args)
+        _resolve_pseudo_key(args, config)
         config.validate()
         plan = _plan_io(args, config)
         resume = _prepare_resume(args, config, plan)
