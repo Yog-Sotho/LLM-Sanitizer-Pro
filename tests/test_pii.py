@@ -135,3 +135,81 @@ class TestStripHtml:
         t = time.perf_counter()
         strip_html(evil + "</div>")
         assert time.perf_counter() - t < 1.0
+
+
+class TestPrecision:
+    """Things that look numeric but are not PII must survive redaction."""
+
+    @pytest.mark.parametrize("text", [
+        "Order 1234567812345678 shipped",          # 16 digits, fails Luhn
+        "tracking 9400111899223197428490 issued",  # long ID, not a card
+        "timestamp 1696512345 seconds",            # bare 10 digits
+        "Upgrade to version 1.2.3.4 now",          # version string
+        "build 10.0.19041.1 is out",               # Windows build number
+        "OID 1.3.6.1.4.1 registered",              # dotted identifier
+        "ssn 000-00-0000 and 666-12-3456 and 900-12-3456 are invalid",
+        "localhost 127.0.0.1 and 0.0.0.0",
+        "slice a[1::2] and b[::3]",
+        "years 2019-2020-2021",
+        "score +1 2 3",
+    ])
+    def test_not_redacted(self, text):
+        counters = {}
+        assert redact_pii(text, counters=counters) == text
+        assert counters == {}
+
+    def test_url_keeps_trailing_punctuation(self):
+        assert redact_pii("See https://example.com/page). Next") == "See [PII_URL]). Next"
+        assert redact_pii("(see https://en.wikipedia.org/wiki/Foo_(bar))") == "(see [PII_URL])"
+        assert redact_pii("go to www.example.com, then") == "go to [PII_URL], then"
+
+
+class TestRecall:
+    def test_ipv6(self):
+        assert redact_pii("client 2001:db8:85a3::8a2e:370:7334 connected") == \
+            "client [PII_IP] connected"
+
+    def test_iban(self):
+        assert redact_pii("IBAN DE89370400440532013000 pay") == "IBAN [PII_IBAN] pay"
+        assert redact_pii("acct GB82 WEST 1234 5698 7654 32 ok") == "acct [PII_IBAN] ok"
+
+    def test_invalid_iban_ignored(self):
+        assert redact_pii("ref DE00370400440532013000 x") == "ref DE00370400440532013000 x"
+
+    def test_amex_15_digits(self):
+        assert redact_pii("amex 3782 822463 10005 ok") == "amex [PII_CARD] ok"
+
+    def test_uk_phone(self):
+        assert redact_pii("Call +44 20 7946 0958 today") == "Call [PII_PHONE] today"
+
+    def test_parenthesized_nanp(self):
+        assert redact_pii("office (555) 123-4567") == "office [PII_PHONE]"
+
+
+class TestMaskingNewKinds:
+    def test_iban_mask(self):
+        assert redact_pii("DE89370400440532013000", mask=True) == "DE**-****-3000"
+
+    def test_ipv6_mask_keeps_prefix(self):
+        assert redact_pii("2001:db8:85a3::8a2e:370:7334", mask=True) == "2001:db8:****::"
+
+
+def test_pseudonym_ips_stay_valid_past_255():
+    import ipaddress
+    reg = PseudoRegistry()
+    ips = [reg.get_or_create(f"192.168.{i // 250}.{i % 250 + 1}", 'ip') for i in range(300)]
+    assert len(set(ips)) == 300
+    for ip in ips:
+        ipaddress.ip_address(ip)  # raises if invalid
+
+
+def test_registry_templates_are_per_instance():
+    from sanitizer_pro.secrets import redact_secrets
+    redact_secrets("AKIAABCDEFGHIJKLMNOP", pseudo_registry=PseudoRegistry())
+    assert 'aws_access_key' not in PseudoRegistry._TEMPLATES
+
+
+def test_custom_patterns_bypass_builtin_validators():
+    import re
+    custom = [(re.compile(r'\bORD-\d{16}\b'), '[ORDER]', 'card')]
+    assert redact_pii("ORD-1234567812345678", extra_patterns=custom) == "[ORDER]"

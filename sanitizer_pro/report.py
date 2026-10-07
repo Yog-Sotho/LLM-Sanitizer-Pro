@@ -29,7 +29,8 @@ _REASON_LABELS = {
 
 _PII_LABELS = {
     'email': 'Email addresses', 'phone': 'Phone numbers', 'card': 'Card numbers',
-    'ssn': 'SSNs', 'ip': 'IP addresses', 'url': 'URLs', 'custom': 'Custom patterns',
+    'ssn': 'SSNs', 'iban': 'IBANs', 'ip': 'IP addresses', 'url': 'URLs',
+    'custom': 'Custom patterns',
     'person': 'Person names (NER)', 'location': 'Locations (NER)', 'org': 'Organizations (NER)',
     'private_key': 'Private keys', 'aws_access_key': 'AWS access keys',
     'github_token': 'GitHub tokens', 'openai_key': 'OpenAI keys',

@@ -78,8 +78,7 @@ _SECRET_PSEUDO_TEMPLATES: Dict[str, str] = {
 
 def _install_pseudo_templates(registry: PseudoRegistry) -> None:
     """Ensure the shared registry knows how to name secret kinds."""
-    for kind, tmpl in _SECRET_PSEUDO_TEMPLATES.items():
-        registry._TEMPLATES.setdefault(kind, tmpl)
+    registry.add_templates(_SECRET_PSEUDO_TEMPLATES)
 
 
 def redact_secrets(
