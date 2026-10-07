@@ -209,6 +209,13 @@ def generate_report_html(
         <section><h2>Chat validation failures</h2>
         {_bar_rows(items, stats.get('filtered_chat_invalid', 0), '--series-1')}</section>""")
 
+    contaminated_by = stats.get('contaminated_by') or {}
+    if contaminated_by:
+        items = list(contaminated_by.items())
+        sections.append(f"""
+        <section><h2>Benchmark contamination by source</h2>
+        {_bar_rows(items, stats.get('filtered_contaminated', 0), '--series-2')}</section>""")
+
     rule_failures = stats.get('rule_failures') or {}
     if rule_failures:
         items = list(rule_failures.items())[:15]

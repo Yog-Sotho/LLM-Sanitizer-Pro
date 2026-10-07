@@ -365,9 +365,12 @@ def _print_info_and_exit(args: argparse.Namespace, parser: argparse.ArgumentPars
             print(json.dumps(template, indent=2))
         sys.exit(0)
     if args.decontaminate and args.decontaminate.strip().lower() == 'list':
-        from sanitizer_pro.decontam import KNOWN_BENCHMARKS
+        from sanitizer_pro.decontam import BENCHMARK_GROUPS, KNOWN_BENCHMARKS
         for name, spec in sorted(KNOWN_BENCHMARKS.items()):
-            print(f"{name:<12} {spec.repo:<40} {spec.note}")
+            print(f"{name:<15} {spec.repo:<36} {spec.note}")
+        for group, members in BENCHMARK_GROUPS.items():
+            print(f"{group:<15} (group) {', '.join(members)}")
+        print("all             (every benchmark not marked gated; gated ones need HF_TOKEN)")
         sys.exit(0)
     if args.profile is not None:
         from sanitizer_pro.profiles import PROFILE_NAMES, describe_profiles
@@ -635,6 +638,10 @@ def _print_summary(args: argparse.Namespace, stats: RunStats) -> None:
     for label, value in rows:
         shown = f"{stats.kept:,}  ({kept_pct:.2f}%)" if value is None else f"{value:,}"
         lines.append(f"{label:<24}: {shown}")
+    if stats.contaminated_by:
+        top = ', '.join(f"{k}={v}" for k, v in sorted(
+            stats.contaminated_by.items(), key=lambda x: -x[1])[:8])
+        lines.append(f"  contamination by benchmark: {top}")
     if stats.rule_failures:
         top = ', '.join(f"{k}={v}" for k, v in sorted(
             stats.rule_failures.items(), key=lambda x: -x[1])[:5])

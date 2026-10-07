@@ -90,7 +90,7 @@ class TestFullTextDecontamination:
             return decontam.NGramIndex()
         monkeypatch.setattr(decontam, 'build_index', fake_build_index)
         Sanitizer(SanitizerConfig(decontaminate=['all'])).close()
-        assert seen['names'] == list(decontam.KNOWN_BENCHMARKS)
+        assert seen['names'] == [n for n, b in decontam.KNOWN_BENCHMARKS.items() if not b.gated]
         with pytest.raises(ConfigurationError, match="Unknown benchmark"):
             Sanitizer(SanitizerConfig(decontaminate=['mmlu', 'nope']))
 

@@ -234,11 +234,27 @@ def iter_hub_records(uri: str, cache_dir: Optional[str] = None) -> Iterator[Dict
             yield from (r for r in batch.to_pylist() if isinstance(r, dict))
 
 
+def _field_values(record: Dict[str, Any], path: str) -> List[str]:
+    """Strings at a dotted field path: 'question', 'options' (list of str),
+    'choices.text' (list inside a struct), 'answers_spans.spans'."""
+    value: Any = record
+    for key in path.split('.'):
+        if not isinstance(value, dict) or key not in value:
+            return []
+        value = value[key]
+    items = value if isinstance(value, (list, tuple)) else [value]
+    return [v for v in items if isinstance(v, str) and v.strip()]
+
+
 def iter_parquet_texts(repo: str, parts: Tuple[Tuple[str, str], ...],
                        fields: Tuple[str, ...], cache_dir: Optional[str] = None,
                        cache_ns: str = os.path.join('~', '.cache', 'llm-sanitizer-pro',
                                                     'benchmarks')) -> Iterator[str]:
-    """Yield text fields from Hub parquet shards (used by decontamination)."""
+    """Yield text fields from Hub parquet shards (used by decontamination).
+
+    A part's config may be '*' (every config of the dataset). Field paths may
+    be dotted and may name list-valued columns. If none of `fields` exists in
+    the data, raise instead of silently indexing nothing."""
     try:
         import pyarrow.parquet as pq
     except ImportError:
@@ -246,15 +262,28 @@ def iter_parquet_texts(repo: str, parts: Tuple[Tuple[str, str], ...],
             "--decontaminate needs pyarrow to read benchmark parquet files "
             "(pip install pyarrow). Alternatively supply local reference files "
             "via --decontam-refs.") from None
+    expanded: List[Tuple[str, str]] = []
     for config, split in parts:
+        if config == '*':
+            expanded += [(c, split) for c in sorted(list_parquet(repo))]
+        else:
+            expanded.append((config, split))
+    for config, split in expanded:
         ref = HFDatasetRef(repo=repo, config=config, split=split)
+        checked = False
         for path in download_parquet(ref, cache_dir=cache_dir, cache_ns=cache_ns):
-            for batch in pq.ParquetFile(str(path)).iter_batches():
+            pf = pq.ParquetFile(str(path))
+            if not checked:
+                columns = set(pf.schema_arrow.names)
+                if not any(f.split('.')[0] in columns for f in fields):
+                    raise ConfigurationError(
+                        f"{ref}: none of the indexed fields {list(fields)} exist "
+                        f"(columns: {sorted(columns)}).")
+                checked = True
+            for batch in pf.iter_batches():
                 for record in batch.to_pylist():
                     for field in fields:
-                        v = record.get(field)
-                        if isinstance(v, str) and v.strip():
-                            yield v
+                        yield from _field_values(record, field)
 
 
 def resolve_model_file(repo: str, filename: str, revision: str = 'main') -> Path:

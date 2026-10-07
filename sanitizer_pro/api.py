@@ -172,9 +172,11 @@ class Sanitizer:
                 self.audit_samples.add_dropped('chat', sanitized, redacted=True)
                 return ProcessResult(None, False, f'chat:{chat_reason}')
 
-        if self._contamination is not None and self._contamination.is_contaminated(
-                full_text_for_decontam(sanitized)):
+        bench = self._contamination.match(full_text_for_decontam(sanitized)) \
+            if self._contamination is not None else None
+        if bench is not None:
             stats.filtered_contaminated += 1
+            stats.contaminated_by[bench] = stats.contaminated_by.get(bench, 0) + 1
             self.audit_samples.add_dropped('contaminated', sanitized, redacted=True)
             return ProcessResult(None, False, 'contaminated')
 
