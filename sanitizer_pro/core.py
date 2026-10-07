@@ -1,10 +1,11 @@
 """Core sanitization logic, recursive traversal, and LLM formatting."""
-import json
+import functools
 import hashlib
+import json
 import re
 from typing import Any, Callable, Dict, List, NamedTuple, Optional, Set
 
-from sanitizer_pro.settings import FieldOps, SanitizerConfig
+from sanitizer_pro.settings import FieldOps, PiiPattern, SanitizerConfig
 from sanitizer_pro.utils import FilterReason, _MAX_DEPTH_DEFAULT
 from sanitizer_pro.pii import clean_text, redact_pii, PseudoRegistry
 from sanitizer_pro.secrets import redact_secrets as _redact_secrets_fn
@@ -42,18 +43,13 @@ class TokenTruncator:
 
 def _sanitize_value(
     v: Any, *, remove_html: bool, remove_pii: bool, pii_mask: bool,
-    extra_pii: Optional[List], pseudo_registry: Optional[PseudoRegistry],
+    extra_pii: Optional[List[PiiPattern]], pseudo_registry: Optional[PseudoRegistry],
     field_pii_only: bool, field_no_clean: bool, max_depth: int,
     truncator: Optional[TokenTruncator], ner_redactor: Optional[Any] = None,
     pii_counters: Optional[Dict[str, int]] = None, redact_secrets: bool = False,
     _depth: int = 0
 ) -> Any:
     if _depth > max_depth: return v
-    kw = dict(remove_html=remove_html, remove_pii=remove_pii, pii_mask=pii_mask,
-              extra_pii=extra_pii, pseudo_registry=pseudo_registry,
-              field_pii_only=field_pii_only, field_no_clean=field_no_clean,
-              max_depth=max_depth, truncator=truncator, ner_redactor=ner_redactor,
-              pii_counters=pii_counters, redact_secrets=redact_secrets, _depth=_depth + 1)
 
     if isinstance(v, str):
         if field_no_clean: return v
@@ -74,12 +70,19 @@ def _sanitize_value(
             cleaned = redact_pii(cleaned, mask=pii_mask, extra_patterns=extra_pii, pseudo_registry=pseudo_registry, counters=pii_counters)
         if truncator: cleaned = truncator.truncate(cleaned)
         return cleaned
-    if isinstance(v, dict): return {k: _sanitize_value(val, **kw) for k, val in v.items()}
-    if isinstance(v, list): return [_sanitize_value(item, **kw) for item in v]
-    return v
+    if not isinstance(v, (dict, list)):
+        return v
+    recurse = functools.partial(
+        _sanitize_value, remove_html=remove_html, remove_pii=remove_pii, pii_mask=pii_mask,
+        extra_pii=extra_pii, pseudo_registry=pseudo_registry, field_pii_only=field_pii_only,
+        field_no_clean=field_no_clean, max_depth=max_depth, truncator=truncator,
+        ner_redactor=ner_redactor, pii_counters=pii_counters, redact_secrets=redact_secrets,
+        _depth=_depth + 1)
+    if isinstance(v, dict): return {k: recurse(val) for k, val in v.items()}
+    return [recurse(item) for item in v]
 
 def make_report_redactor(
-    remove_pii: bool, redact_secrets: bool, extra_pii: Optional[List] = None,
+    remove_pii: bool, redact_secrets: bool, extra_pii: Optional[List[PiiPattern]] = None,
     ner_redactor: Optional[Any] = None, max_depth: int = _MAX_DEPTH_DEFAULT,
 ) -> Optional[Callable[[Any], Any]]:
     """Redactor for audit-report samples of dropped records.

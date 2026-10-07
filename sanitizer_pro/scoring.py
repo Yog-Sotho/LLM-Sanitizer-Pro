@@ -19,7 +19,7 @@ Two backends:
     log-linearly onto [0, 1] (perplexity 10 → 1.0, 10 000 → 0.0).
 """
 import math
-from typing import Callable, List, Optional
+from typing import Callable, List, Optional, Protocol
 
 from sanitizer_pro.utils import ConfigurationError
 
@@ -143,7 +143,13 @@ class PerplexityScorer:
         return perplexity_to_score(self._ppl(text))
 
 
-def make_scorer(backend: str = 'heuristic', model: Optional[str] = None):
+class Scorer(Protocol):
+    backend_name: str
+
+    def score(self, text: str) -> float: ...
+
+
+def make_scorer(backend: str = 'heuristic', model: Optional[str] = None) -> Scorer:
     if backend == 'heuristic':
         return HeuristicScorer()
     if backend == 'perplexity':

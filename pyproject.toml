@@ -52,7 +52,7 @@ semantic = [
 ]
 dev = [
     "ruff>=0.1.0,<0.17",
-    "mypy>=1.5.0",
+    "mypy>=2.3,<3; python_version >= '3.10'",  # type-checked in CI on 3.12
     "pytest>=7.4.0",
 ]
 
@@ -82,7 +82,20 @@ ignore = ["E701", "E702"]
 testpaths = ["tests"]
 
 [tool.mypy]
-python_version = "3.9"
+# Newest mypy cannot target 3.9; 3.9 syntax compatibility is enforced by ruff
+# (target-version py39) and the 3.9 CI test job.
+python_version = "3.10"
 strict = true
 warn_return_any = true
 warn_unused_configs = true
+files = ["sanitizer_pro"]
+
+[[tool.mypy.overrides]]
+# Optional extras: treated as opaque (Any) whether or not they — or their
+# stub packages — are installed, so results don't depend on the environment.
+module = [
+    "datasketch", "ijson", "langdetect", "model2vec", "numpy", "openpyxl", "pandas",
+    "pyarrow", "pyarrow.*", "spacy", "torch", "tqdm", "transformers", "xlsxwriter", "yaml",
+]
+ignore_missing_imports = true
+follow_imports = "skip"

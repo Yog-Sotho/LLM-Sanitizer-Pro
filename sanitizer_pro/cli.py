@@ -494,17 +494,19 @@ class _Checkpointer:
     def __init__(self, args: argparse.Namespace, sanitizer: Sanitizer) -> None:
         from sanitizer_pro.dedup import SQLiteDeduper
         self.args, self.s = args, sanitizer
-        self.durable_dedup = (args.resume and bool(args.dedup_db_path)
-                              and isinstance(sanitizer.deduper, SQLiteDeduper))
+        # Only a named SQLite DB survives the process, so only it is rolled back.
+        self.durable_dedup: Optional[SQLiteDeduper] = (
+            sanitizer.deduper if args.resume and args.dedup_db_path
+            and isinstance(sanitizer.deduper, SQLiteDeduper) else None)
 
     def rollback_dedup(self, mark: Optional[int]) -> None:
-        if not self.durable_dedup:
+        if self.durable_dedup is None:
             return
         if mark is None:
             logging.warning("Checkpoint has no dedup mark; hashes recorded after it may "
                             "drop records as false duplicates.")
             return
-        forgotten = self.s.deduper.rollback_to(mark)
+        forgotten = self.durable_dedup.rollback_to(mark)
         if forgotten:
             logging.info(f"Dedup DB: forgot {forgotten:,} hashes recorded after the last checkpoint.")
 
@@ -517,7 +519,7 @@ class _Checkpointer:
         # references them: a crash in between leaves the previous checkpoint,
         # whose smaller marks make resume discard the newer rows and hashes.
         output_bytes = writer.durable_size() if writer is not None else None
-        dedup_mark = self.s.deduper.high_water_mark() if self.durable_dedup else None
+        dedup_mark = self.durable_dedup.high_water_mark() if self.durable_dedup else None
         if self.s.deduper is not None and hasattr(self.s.deduper, 'flush'):
             self.s.deduper.flush()
         reg = self.s.pseudo_registry
@@ -535,7 +537,9 @@ def _skip(it: Iterator[Any], n: int) -> Iterator[Any]:
 
 def _progress(it: Iterable[Any], args: argparse.Namespace, desc: str) -> Iterable[Any]:
     if TQDM_AVAILABLE and not args.no_progress and not args.quiet and args.input != _STDIN:
-        return _tqdm(it, desc=desc, unit="rec", dynamic_ncols=True, smoothing=0.1)
+        wrapped: Iterable[Any] = _tqdm(it, desc=desc, unit="rec", dynamic_ncols=True,
+                                       smoothing=0.1)
+        return wrapped
     return it
 
 

@@ -67,6 +67,8 @@ def load_checkpoint(output_path: str, input_path: str) -> Optional[Dict[str, Any
         return None
     try:
         payload = json.loads(Path(path).read_text(encoding='utf-8'))
+        if not isinstance(payload, dict):
+            raise ValueError("not a JSON object")
     except Exception as exc:
         raise ConfigurationError(f"Corrupt checkpoint {path}: {exc}. "
                                  "Delete it to start fresh.") from None

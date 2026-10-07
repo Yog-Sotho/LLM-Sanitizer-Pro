@@ -234,11 +234,11 @@ def generate_report_html(
     if samples is not None and samples.dropped:
         blocks = []
         for reason, examples in samples.dropped.items():
-            items = ''.join(f'<li><code>{_e(s)}</code></li>' for s in examples)
+            rows_html = ''.join(f'<li><code>{_e(s)}</code></li>' for s in examples)
             blocks.append(
                 f'<details><summary>{_e(_REASON_LABELS.get(reason, reason))} '
                 f'({len(examples)} sample{"s" if len(examples) != 1 else ""})</summary>'
-                f'<ul>{items}</ul></details>')
+                f'<ul>{rows_html}</ul></details>')
         sections.append(f"""
         <section><h2>Samples of removed records</h2>{''.join(blocks)}</section>""")
 

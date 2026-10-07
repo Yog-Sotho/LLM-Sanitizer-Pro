@@ -6,7 +6,7 @@ import os
 import sys
 import tempfile
 from pathlib import Path
-from typing import Any, Dict, Iterator, List, Optional
+from typing import Any, Dict, Iterator, List, Optional, Set
 
 from sanitizer_pro.sampling import content_fraction
 from sanitizer_pro.utils import ConfigurationError, smart_open, _STDOUT
@@ -14,16 +14,16 @@ from sanitizer_pro.utils import ConfigurationError, smart_open, _STDOUT
 try:
     import pandas as pd
 except ImportError:
-    pd = None  # type: ignore[assignment]
+    pd = None
 try:
     import xlsxwriter
 except ImportError:
-    xlsxwriter = None  # type: ignore[assignment]
+    xlsxwriter = None
 try:
     import pyarrow as pa
     import pyarrow.parquet as pq
 except ImportError:
-    pa = pq = None  # type: ignore[assignment]
+    pa = pq = None
 
 _STREAM_FORMATS = {'.jsonl', '.txt', '.csv', '.json'}
 _BUFFERED_FORMATS = {'.xlsx', '.xls', '.parquet'}
@@ -91,7 +91,7 @@ class StreamingWriter:
         self._tmp_path: Optional[str] = None
         self._stage_path: Optional[str] = None
         self._fields: Dict[str, None] = {}  # ordered union of keys (staged formats)
-        self._csv_writer: Optional[csv.DictWriter] = None
+        self._csv_writer: Optional['csv.DictWriter[str]'] = None
         self._csv_fields: Optional[List[str]] = None
         self._dropped_columns: Dict[str, int] = {}
         self._buffer: List[Dict[str, Any]] = []
@@ -197,7 +197,7 @@ class StreamingWriter:
             self._file = smart_open(self.output_path, 'a', encoding=self.encoding)
             if self._csv_writer is not None:
                 self._csv_writer = csv.DictWriter(
-                    self._file, fieldnames=self._csv_fields, extrasaction='ignore')
+                    self._file, fieldnames=self._csv_fields or [], extrasaction='ignore')
             fd = os.open(self.output_path, os.O_RDONLY)
             try:
                 os.fsync(fd)
@@ -210,16 +210,17 @@ class StreamingWriter:
 
     # -- staged rendering -----------------------------------------------------
 
-    def _staged_rows(self, fields: List[str], stringify: Optional[set] = None
+    def _staged_rows(self, fields: List[str], stringify: Optional[Set[str]] = None
                      ) -> Iterator[Dict[str, Any]]:
         stringify = stringify or set()
+        assert self._stage_path is not None
         with open(self._stage_path, 'r', encoding='utf-8') as src:
             for line in src:
                 rec = json.loads(line)
                 yield {f: (_scalar_or_json(rec.get(f)) if f in stringify else rec.get(f))
                        for f in fields}
 
-    def _staged_batches(self, fields: List[str], stringify: Optional[set] = None
+    def _staged_batches(self, fields: List[str], stringify: Optional[Set[str]] = None
                         ) -> Iterator[List[Dict[str, Any]]]:
         batch: List[Dict[str, Any]] = []
         for row in self._staged_rows(fields, stringify):
@@ -240,15 +241,15 @@ class StreamingWriter:
             for row in self._staged_rows(fields):
                 writer.writerow({k: _csv_value(v) for k, v in row.items()})
 
-    def _parquet_schema(self, fields: List[str], stringify: set) -> Any:
+    def _parquet_schema(self, fields: List[str], stringify: Set[str]) -> Any:
         schemas = [pa.Table.from_pylist(b).schema for b in self._staged_batches(fields, stringify)]
         if not schemas:
             return pa.schema([(f, pa.null()) for f in fields])
         return pa.unify_schemas(schemas, promote_options='permissive')
 
-    def _conflicting_fields(self, fields: List[str]) -> set:
+    def _conflicting_fields(self, fields: List[str]) -> Set[str]:
         """Fields whose values cannot share one Arrow type (e.g. int and str)."""
-        conflicts = set()
+        conflicts: Set[str] = set()
         per_field: Dict[str, List[Any]] = {f: [] for f in fields}
         for batch in self._staged_batches(fields):
             for f in fields:
@@ -270,7 +271,7 @@ class StreamingWriter:
 
     def _render_parquet(self, dest: str) -> None:
         fields = list(self._fields)
-        stringify: set = set()
+        stringify: Set[str] = set()
         try:
             schema = self._parquet_schema(fields, stringify)
         except (pa.ArrowInvalid, pa.ArrowTypeError, pa.ArrowNotImplementedError):
@@ -365,19 +366,22 @@ class ShardedWriter:
         self._open_next()
         return self
 
-    def _open_next(self) -> None:
+    def _open_next(self) -> StreamingWriter:
         path = _derive_path(self.output_path, f"{self._shard_index:05d}")
-        self._writer = StreamingWriter(path, self.fmt, self.encoding,
-                                       txt_fallback_field=self.txt_fallback_field)
-        self._writer.__enter__()
+        writer = StreamingWriter(path, self.fmt, self.encoding,
+                                 txt_fallback_field=self.txt_fallback_field)
+        writer.__enter__()
+        self._writer = writer
         self._in_shard = 0
+        return writer
 
     def write(self, record: Dict[str, Any]) -> None:
+        writer = self._writer if self._writer is not None else self._open_next()
         if self._in_shard >= self.shard_size:
-            self._writer.__exit__(None, None, None)
+            writer.__exit__(None, None, None)
             self._shard_index += 1
-            self._open_next()
-        self._writer.write(record)
+            writer = self._open_next()
+        writer.write(record)
         self._in_shard += 1
 
     def flush(self) -> None:
