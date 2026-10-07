@@ -40,6 +40,7 @@ from sanitizer_pro.config import (
     load_custom_pii_patterns, load_field_config, build_field_ops, load_quality_script
 )
 from sanitizer_pro.core import sanitize_record, TokenTruncator, get_record_hash, make_report_redactor
+from sanitizer_pro.decontam import full_text_for_decontam
 from sanitizer_pro.dedup import make_deduper
 from sanitizer_pro.pii import PseudoRegistry
 from sanitizer_pro.io.readers import read_records
@@ -346,7 +347,7 @@ def main() -> None:
     if args.config:
         try:
             cfg = load_config_file(args.config)
-            apply_config_to_args(args, cfg, explicit_args)
+            apply_config_to_args(args, cfg, explicit_args, parser)
         except Exception as exc:
             print(f"ERROR loading config: {exc}", file=sys.stderr)
             sys.exit(1)
@@ -603,7 +604,7 @@ def main() -> None:
             csv_columns=args.csv_columns_list, excel_sheet=excel_sheet,
             excel_warn_mb=args.excel_warn_size,
             input_format=None if is_hub_input else input_fmt,
-            json_path=args.json_path, hf_cache=args.hf_cache
+            json_path=args.json_path, hf_cache=args.hf_cache, yield_malformed=True
         )
     except Exception as exc:
         logging.critical(f"Failed to open input: {exc}"); sys.exit(1)
@@ -678,7 +679,8 @@ def main() -> None:
                     audit_samples.add_dropped('chat', sanitized, redacted=True)
                 return
 
-        if contamination_index is not None and contamination_index.is_contaminated(quality_text):
+        if contamination_index is not None and contamination_index.is_contaminated(
+                full_text_for_decontam(sanitized)):
             run_stats.filtered_contaminated += 1
             if audit_samples is not None:
                 audit_samples.add_dropped('contaminated', sanitized, redacted=True)

@@ -1,6 +1,7 @@
 """Quality scoring, language detection, and content filtering."""
 import argparse
 import re
+import sys
 from typing import Any, List, Optional, Tuple
 
 try:
@@ -10,14 +11,18 @@ try:
 except ImportError:
     LANGDETECT_AVAILABLE = False
 
+_MAX_QUALITY_CHARS = 8192
+
+
 def extract_text_for_quality(
     record: Any, text_fields: Optional[List[str]] = None,
-    max_depth: int = 20, _depth: int = 0, _budget: Optional[List[int]] = None
+    max_depth: int = 20, _depth: int = 0, _budget: Optional[List[int]] = None,
+    max_chars: Optional[int] = _MAX_QUALITY_CHARS,
 ) -> str:
-    """Recursively extract text for quality scoring with an 8192 char budget."""
-    _MAX_QUALITY_CHARS = 8192
+    """Recursively extract text for quality scoring (default 8192 char budget;
+    max_chars=None extracts everything, e.g. for decontamination)."""
     if _budget is None:
-        _budget = [_MAX_QUALITY_CHARS]
+        _budget = [max_chars if max_chars is not None else sys.maxsize]
     if _depth > max_depth or _budget[0] <= 0:
         return ''
     if isinstance(record, str):

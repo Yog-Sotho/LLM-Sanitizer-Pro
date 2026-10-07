@@ -1,10 +1,11 @@
 """Configuration loading, merging, and custom script loading."""
 import argparse
 import copy
+import difflib
 import importlib.util
 import json
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Set, Tuple
+from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 import re
 
 from sanitizer_pro.utils import ConfigurationError
@@ -32,11 +33,61 @@ def collect_explicit_args(parser: argparse.ArgumentParser) -> Set[str]:
     explicit_ns, _ = parser_copy.parse_known_args()
     return set(vars(explicit_ns).keys())
 
-def apply_config_to_args(args: argparse.Namespace, config: Dict[str, Any], explicit_args: Set[str]) -> None:
+_TRUE = {'true', 'yes', 'on', '1'}
+_FALSE = {'false', 'no', 'off', '0'}
+
+
+def _coerce(key: str, value: Any, action: Optional[argparse.Action]) -> Any:
+    """Validate/coerce a config value to what the CLI flag would produce."""
+    if action is None or value is None:
+        return value
+    if isinstance(action, (argparse._StoreTrueAction, argparse._StoreFalseAction)):
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, str) and value.strip().lower() in _TRUE | _FALSE:
+            return value.strip().lower() in _TRUE
+        raise ConfigurationError(f"Config key '{key}' must be true/false (got {value!r}).")
+    if action.type in (int, float):
+        if isinstance(value, bool) or not isinstance(value, (int, float, str)):
+            raise ConfigurationError(f"Config key '{key}' must be a number (got {value!r}).")
+        try:
+            value = action.type(value)
+        except ValueError:
+            raise ConfigurationError(f"Config key '{key}' must be a number (got {value!r}).") from None
+    elif not isinstance(value, (str, int, float, list, tuple)):
+        raise ConfigurationError(f"Config key '{key}' has an unsupported value: {value!r}.")
+    if action.choices is not None and value not in action.choices:
+        raise ConfigurationError(
+            f"Config key '{key}' must be one of {list(action.choices)} (got {value!r}).")
+    return value
+
+
+def apply_config_to_args(args: argparse.Namespace, config: Dict[str, Any], explicit_args: Set[str],
+                         parser: Optional[argparse.ArgumentParser] = None) -> None:
+    """Apply config-file values to flags the user did not set explicitly.
+
+    Keys may use dashes or underscores (`remove-pii` == `remove_pii`). Unknown
+    keys are an error rather than silently ignored: a typo in a sanitization
+    setting must not quietly disable it. With `parser`, values are type-checked
+    and coerced like the corresponding CLI flag."""
+    if not isinstance(config, dict):
+        raise ConfigurationError("Config file must contain a mapping of option names to values.")
     current = vars(args)
-    for key, value in config.items():
-        if key in current and key not in explicit_args:
-            setattr(args, key, value)
+    actions = {a.dest: a for a in parser._actions} if parser is not None else {}
+    unknown = []
+    for raw_key, value in config.items():
+        key = str(raw_key).replace('-', '_')
+        if key not in current:
+            unknown.append(str(raw_key))
+            continue
+        if key not in explicit_args:
+            setattr(args, key, _coerce(key, value, actions.get(key)))
+    if unknown:
+        hints = []
+        for k in unknown:
+            close = difflib.get_close_matches(k.replace('-', '_'), list(current), n=1)
+            hints.append(f"'{k}'" + (f" (did you mean '{close[0]}'?)" if close else ''))
+        raise ConfigurationError(f"Unknown config key(s): {', '.join(hints)}.")
 
 def load_quality_script(path: str) -> Callable[[Dict[str, Any]], bool]:
     import logging

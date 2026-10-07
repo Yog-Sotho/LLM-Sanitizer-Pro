@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, Iterator, List, Optional, Tuple
 
 from sanitizer_pro.core import TokenTruncator, get_record_hash, make_report_redactor, sanitize_record
+from sanitizer_pro.decontam import full_text_for_decontam
 from sanitizer_pro.dedup import make_deduper
 from sanitizer_pro.pii import PseudoRegistry
 from sanitizer_pro.stats import RunStats
@@ -76,7 +77,7 @@ class SanitizerConfig:
     dedup_normalize: bool = False
 
     # Decontamination
-    decontaminate: Optional[List[str]] = None   # benchmark names
+    decontaminate: Optional[List[str]] = None   # benchmark names, or ['all']
     decontam_refs: Optional[List[str]] = None   # local reference files
     decontam_ngram: int = 8
     decontam_min_hits: int = 1
@@ -186,9 +187,13 @@ class Sanitizer:
 
         self._contamination = None
         if c.decontaminate or c.decontam_refs:
-            from sanitizer_pro.decontam import build_index
+            from sanitizer_pro.decontam import build_index, resolve_benchmark_names
+            names = c.decontaminate
+            if names:  # validates names and expands 'all', like the CLI
+                names = resolve_benchmark_names(
+                    names if isinstance(names, str) else ','.join(names))
             self._contamination = build_index(
-                benchmarks=c.decontaminate, ref_files=c.decontam_refs,
+                benchmarks=names, ref_files=c.decontam_refs,
                 cache_dir=c.decontam_cache, ngram=c.decontam_ngram,
                 min_hits=c.decontam_min_hits)
 
@@ -265,7 +270,8 @@ class Sanitizer:
                 self.audit_samples.add_dropped('chat', sanitized, redacted=True)
                 return ProcessResult(None, False, f'chat:{chat_reason}')
 
-        if self._contamination is not None and self._contamination.is_contaminated(quality_text):
+        if self._contamination is not None and self._contamination.is_contaminated(
+                full_text_for_decontam(sanitized)):
             self.stats.filtered_contaminated += 1
             self.audit_samples.add_dropped('contaminated', sanitized, redacted=True)
             return ProcessResult(None, False, 'contaminated')

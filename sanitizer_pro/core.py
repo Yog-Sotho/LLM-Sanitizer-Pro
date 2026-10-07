@@ -11,6 +11,7 @@ from sanitizer_pro.secrets import redact_secrets as _redact_secrets_fn
 from sanitizer_pro.quality import extract_text_for_quality, _check_quality_reason, detect_language, is_code_heuristic, contains_profanity
 
 FieldOps = Tuple[Dict[str, str], Set[str], Set[str], Set[str]]
+_TOKEN_RE = re.compile(r'\S+')
 
 class TokenTruncator:
     def __init__(self, max_tokens: int, tokenizer_name: str = 'whitespace') -> None:
@@ -31,8 +32,12 @@ class TokenTruncator:
         if self._hf:
             ids = self._hf.encode(text, add_special_tokens=False)
             return self._hf.decode(ids[:self.max_tokens], skip_special_tokens=True) if len(ids) > self.max_tokens else text
-        words = text.split()
-        return ' '.join(words[:self.max_tokens]) if len(words) > self.max_tokens else text
+        # Cut after the Nth whitespace-delimited token, keeping the original
+        # spacing and newlines (code/markdown structure) of what remains.
+        for i, m in enumerate(_TOKEN_RE.finditer(text), 1):
+            if i == self.max_tokens:
+                return text[:m.end()] if text[m.end():].strip() else text
+        return text
 
 def _sanitize_value(
     v: Any, *, remove_html: bool, remove_pii: bool, pii_mask: bool,

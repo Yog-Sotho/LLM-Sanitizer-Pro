@@ -17,6 +17,9 @@ import json
 import logging
 import os
 import ssl
+import time
+import urllib.error
+import urllib.parse
 import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
@@ -29,20 +32,105 @@ _HF_PARQUET_API = 'https://huggingface.co/api/datasets/{repo}/parquet'
 _DATASET_CACHE = os.path.join('~', '.cache', 'llm-sanitizer-pro', 'datasets')
 
 
+_RETRY_STATUS = {429, 500, 502, 503, 504}
+_ATTEMPTS = 4
+_CHUNK = 1 << 20
+_sleep = time.sleep  # patched in tests
+
+
 def _ssl_context() -> ssl.SSLContext:
     cafile = (os.environ.get('REQUESTS_CA_BUNDLE') or os.environ.get('SSL_CERT_FILE')
               or os.environ.get('CURL_CA_BUNDLE'))
     return ssl.create_default_context(cafile=cafile if cafile and os.path.exists(cafile) else None)
 
 
-def http_get(url: str, timeout: float = 300.0) -> bytes:
+def is_hf_host(url: str) -> bool:
+    """True only for Hugging Face hosts (exact hostname match, not substring)."""
+    host = (urllib.parse.urlparse(url).hostname or '').lower()
+    return any(host == d or host.endswith('.' + d) for d in ('huggingface.co', 'hf.co'))
+
+
+class _HFRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """urllib copies Authorization onto redirects; drop it when the target is
+    not a Hugging Face host (parquet shards redirect to storage/CDN hosts)."""
+
+    def redirect_request(self, req: Any, fp: Any, code: int, msg: str, headers: Any,
+                         newurl: str) -> Any:
+        new = super().redirect_request(req, fp, code, msg, headers, newurl)
+        if new is not None and not is_hf_host(newurl):
+            new.remove_header('Authorization')
+        return new
+
+
+def _open(url: str, timeout: float) -> Any:
     headers = {'User-Agent': 'llm-sanitizer-pro'}
     token = os.environ.get('HF_TOKEN') or os.environ.get('HUGGING_FACE_HUB_TOKEN')
-    if token and 'huggingface.co' in url:
+    if token and is_hf_host(url):
         headers['Authorization'] = f'Bearer {token}'
-    req = urllib.request.Request(url, headers=headers)
-    with urllib.request.urlopen(req, timeout=timeout, context=_ssl_context()) as resp:
-        return resp.read()
+    opener = urllib.request.build_opener(
+        urllib.request.HTTPSHandler(context=_ssl_context()), _HFRedirectHandler())
+    return opener.open(urllib.request.Request(url, headers=headers), timeout=timeout)
+
+
+def _retry_delay(exc: Exception, attempt: int) -> Optional[float]:
+    """Seconds to wait before retrying, or None when the error is final."""
+    if attempt >= _ATTEMPTS - 1:
+        return None
+    if isinstance(exc, urllib.error.HTTPError):
+        if exc.code not in _RETRY_STATUS:
+            return None
+        retry_after = exc.headers.get('Retry-After') if exc.headers else None
+        if retry_after and retry_after.isdigit():
+            return min(float(retry_after), 60.0)
+    elif not isinstance(exc, (urllib.error.URLError, TimeoutError, ConnectionError)):
+        return None
+    return float(2 ** (attempt + 1))  # 2, 4, 8 s
+
+
+def http_get(url: str, timeout: float = 300.0) -> bytes:
+    """GET a (small) resource with retries on 429/5xx and network errors."""
+    for attempt in range(_ATTEMPTS):
+        try:
+            with _open(url, timeout) as resp:
+                return resp.read()
+        except Exception as exc:
+            delay = _retry_delay(exc, attempt)
+            if delay is None:
+                raise
+            logging.warning(f"GET {url} failed ({exc}); retrying in {delay:.0f}s")
+            _sleep(delay)
+    raise AssertionError('unreachable')
+
+
+def http_download(url: str, dest: Path, timeout: float = 300.0) -> None:
+    """Stream a file to `dest` (atomically) with retries; verifies the size
+    against Content-Length so a cut-off transfer is never cached."""
+    part = dest.with_name(dest.name + '.part')
+    for attempt in range(_ATTEMPTS):
+        try:
+            with _open(url, timeout) as resp, open(part, 'wb') as out:
+                expected = resp.headers.get('Content-Length')
+                written = 0
+                while True:
+                    chunk = resp.read(_CHUNK)
+                    if not chunk:
+                        break
+                    out.write(chunk)
+                    written += len(chunk)
+            if expected is not None and expected.isdigit() and written != int(expected):
+                raise ConnectionError(f"incomplete download: {written} of {expected} bytes")
+            os.replace(part, dest)
+            return
+        except Exception as exc:
+            delay = _retry_delay(exc, attempt)
+            if delay is None:
+                try:
+                    part.unlink()
+                except OSError:
+                    pass
+                raise
+            logging.warning(f"Download of {url} failed ({exc}); retrying in {delay:.0f}s")
+            _sleep(delay)
 
 
 def list_parquet(repo: str) -> Dict[str, Any]:
@@ -123,9 +211,7 @@ def download_parquet(ref: HFDatasetRef, cache_dir: Optional[str] = None,
     for i, url in enumerate(urls):
         dest = base / f"part-{i:03d}.parquet"
         logging.info(f"Downloading {ref.repo} [{ref.split}] shard {i + 1}/{len(urls)} …")
-        tmp = dest.with_suffix('.tmp')
-        tmp.write_bytes(http_get(url))
-        os.replace(tmp, dest)
+        http_download(url, dest)
         paths.append(dest)
     manifest.write_text(json.dumps([p.name for p in paths]))
     return paths
@@ -172,6 +258,7 @@ def is_hub_uri(path: Optional[str]) -> bool:
     return bool(path) and str(path).startswith(HF_URI_PREFIX)
 
 
-__all__ = ['HFDatasetRef', 'HF_URI_PREFIX', 'download_parquet', 'http_get', 'is_hub_uri',
+__all__ = ['HFDatasetRef', 'HF_URI_PREFIX', 'download_parquet', 'http_download', 'http_get',
+           'is_hf_host', 'is_hub_uri',
            'iter_hub_records', 'iter_parquet_texts', 'list_parquet', 'parse_hf_uri',
            'resolve_parquet_urls', 'InputFormatError']

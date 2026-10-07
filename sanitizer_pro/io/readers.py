@@ -5,7 +5,7 @@ import json
 import logging
 import os
 from pathlib import Path
-from typing import Any, Dict, Iterator, List, Optional
+from typing import Any, Iterator, List, Optional
 
 from sanitizer_pro.utils import InputFormatError, smart_open, _STDIN
 
@@ -28,13 +28,32 @@ csv.field_size_limit(min(2**31 - 1, 512 * 1024 * 1024))
 SUPPORTED_INPUT_FORMATS = {'.jsonl', '.json', '.csv', '.tsv', '.txt', '.parquet', '.xlsx', '.xls'}
 
 
+class MalformedRecord:
+    """Placeholder yielded (with yield_malformed=True) for input that is not a
+    JSON object — an unparseable JSONL line or a non-object JSON item — so the
+    caller can count it instead of it vanishing."""
+
+    __slots__ = ('location', 'error')
+
+    def __init__(self, location: str, error: str) -> None:
+        self.location, self.error = location, error
+
+    def __repr__(self) -> str:
+        return f"MalformedRecord({self.location}: {self.error})"
+
+
 def read_records(
     input_path: str, encoding: str = 'utf-8', paragraph_mode: bool = False,
     csv_delimiter: Optional[str] = None, csv_no_header: bool = False,
     csv_columns: Optional[List[str]] = None, excel_sheet: Any = 0,
     excel_warn_mb: float = 100, input_format: Optional[str] = None, json_path: str = 'item',
-    hf_cache: Optional[str] = None
-) -> Iterator[Dict[str, Any]]:
+    hf_cache: Optional[str] = None, yield_malformed: bool = False
+) -> Iterator[Any]:
+    """Stream records (dicts) from a file, stdin or hf:// URI.
+
+    With yield_malformed=True, unparseable JSONL lines and non-object JSON
+    items are yielded as MalformedRecord markers (counted by the caller);
+    otherwise they are skipped with a warning."""
     if input_path.startswith('hf://'):
         from sanitizer_pro.hub import iter_hub_records
         yield from iter_hub_records(input_path, cache_dir=hf_cache)
@@ -70,10 +89,12 @@ def read_records(
             try:
                 f_obj = gzip.open(input_path, 'rb') if is_gz else open(input_path, 'rb')
                 with f_obj:
-                    for item in ijson.items(f_obj, json_path):
+                    for i, item in enumerate(ijson.items(f_obj, json_path)):
                         streamed_any = True
                         if isinstance(item, dict):
                             yield item
+                        elif yield_malformed:
+                            yield MalformedRecord(f"item {i}", f"not an object ({type(item).__name__})")
                 if streamed_any:
                     return
                 logging.debug(f"ijson found no items at path '{json_path}', "
@@ -84,7 +105,11 @@ def read_records(
                 logging.warning(f"ijson streaming failed ({e}), falling back to json.load")
         with smart_open(input_path, 'r', encoding=encoding) as f:
             data = json.load(f)
-            yield from (data if isinstance(data, list) else [data])
+            for i, item in enumerate(data if isinstance(data, list) else [data]):
+                if isinstance(item, dict) or not yield_malformed:
+                    yield item
+                else:
+                    yield MalformedRecord(f"item {i}", f"not an object ({type(item).__name__})")
         return
 
     with smart_open(input_path, 'r', encoding=encoding) as f:
@@ -94,11 +119,15 @@ def read_records(
                 if not line.strip():
                     continue
                 try:
-                    yield json.loads(line)
+                    item = json.loads(line)
                 except json.JSONDecodeError as exc:
                     bad_lines += 1
                     if bad_lines <= 5:
                         logging.warning(f"Skipping malformed JSONL line {lineno}: {exc}")
+                    if yield_malformed:
+                        yield MalformedRecord(f"line {lineno}", str(exc))
+                    continue
+                yield item
             if bad_lines > 5:
                 logging.warning(f"Skipped {bad_lines} malformed JSONL lines in total.")
         elif fmt in {'.csv', '.tsv'}:
