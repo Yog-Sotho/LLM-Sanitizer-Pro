@@ -6,6 +6,7 @@ import logging
 import multiprocessing
 import os
 import sys
+import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -18,34 +19,23 @@ except ImportError:
     _tqdm = None
     TQDM_AVAILABLE = False
 
-try:
-    import openpyxl as _openpyxl
-    OPENPYXL_AVAILABLE = True
-except ImportError:
-    _openpyxl = None
-    OPENPYXL_AVAILABLE = False
-
-try:
-    import pandas as pd
-    PANDAS_AVAILABLE = True
-except ImportError:
-    pd = None
-    PANDAS_AVAILABLE = False
-
 from sanitizer_pro import __version__
 from sanitizer_pro.api import Sanitizer
 from sanitizer_pro.config import apply_config_to_args, collect_explicit_args, load_config_file
-from sanitizer_pro.io.readers import read_records
+from sanitizer_pro.io.sources import (
+    Chunk, chunkable, expand_inputs, is_multi_input, iter_files, jsonl_chunks,
+)
 from sanitizer_pro.langid import LANG_BACKENDS
 from sanitizer_pro.io.writers import ShardedWriter, SplitWriter, StreamingWriter, parse_split_spec
 from sanitizer_pro.pii import PseudoRegistry
 from sanitizer_pro.settings import DEFAULTS as D
 from sanitizer_pro.settings import (
-    DEDUP_BACKENDS, NER_BACKENDS, QUALITY_SCORERS, SanitizerConfig, as_list,
+    DEDUP_BACKENDS, FUZZY_BACKENDS, NER_BACKENDS, QUALITY_SCORERS, SEMANTIC_INDEXES,
+    SanitizerConfig, as_list,
 )
 from sanitizer_pro.stats import RunStats
 from sanitizer_pro.utils import _EXCEL_WARN_MB_DEFAULT, _STDIN, _STDOUT, ConfigurationError, resolve_fmt
-from sanitizer_pro.worker import _worker_fn, _worker_init
+from sanitizer_pro.worker import WorkerResult, _worker_chunk, _worker_fn, _worker_init
 
 # =============================================================================
 # Constants
@@ -86,16 +76,20 @@ def resolve_excel_sheet(
     
     if input_path and input_path not in {_STDIN}:
         try:
-            if OPENPYXL_AVAILABLE:
-                wb = _openpyxl.load_workbook(input_path, read_only=True, data_only=True)
+            # Imported here: pandas alone adds ~0.2 s to every CLI start.
+            try:
+                import openpyxl
+                wb = openpyxl.load_workbook(input_path, read_only=True, data_only=True)
                 available = wb.sheetnames
                 wb.close()
-            elif PANDAS_AVAILABLE:
+            except ImportError:
+                try:
+                    import pandas as pd
+                except ImportError:
+                    return resolved
                 xl = pd.ExcelFile(input_path)
                 available = xl.sheet_names
                 xl.close()
-            else:
-                return resolved
 
             if isinstance(resolved, str) and resolved not in available:
                 raise ConfigurationError(f"Sheet '{resolved}' not found. Available: {available}")
@@ -125,7 +119,10 @@ def build_parser() -> argparse.ArgumentParser:
 
     # Core I/O
     parser.add_argument('--version', action='version', version=f"sanitize {__version__}")
-    parser.add_argument('--input', default=None, help="Input file or '-' for stdin.")
+    parser.add_argument('--input', default=None,
+                        help="Input file, directory (searched recursively), glob pattern "
+                             "(quote it: 'data/*.jsonl', 'data/**/*.parquet'), hf://… URI, "
+                             "or '-' for stdin. Multiple files are read in sorted order.")
     parser.add_argument('--output', default=None, help="Output file or '-' for stdout.")
     parser.add_argument('--input-format', default=None, metavar='FMT', help="Override input format.")
     parser.add_argument('--output-format', default=None, metavar='FMT', help="Override output format.")
@@ -187,9 +184,16 @@ def build_parser() -> argparse.ArgumentParser:
     # Features
     fg = parser.add_argument_group('Features')
     fg.add_argument('--deduplicate', action='store_true')
-    fg.add_argument('--fuzzy-dedup', action='store_true', help='Use MinHash+LSH for near-duplicate detection.')
+    fg.add_argument('--fuzzy-dedup', action='store_true',
+                    help='Near-duplicate detection: MinHash over word 3-shingles, LSH '
+                         'candidates verified by signature similarity. With '
+                         '--dedup-backend sqlite the index lives on disk (constant memory).')
     fg.add_argument('--fuzzy-threshold', type=float, default=D.fuzzy_threshold, metavar='T',
                     help='Jaccard similarity threshold for --fuzzy-dedup (0-1, default 0.8).')
+    fg.add_argument('--fuzzy-backend', default=D.fuzzy_backend, choices=list(FUZZY_BACKENDS),
+                    help='MinHash implementation: rensa (Rust, ~10x faster; '
+                         "pip install 'llm-sanitizer-pro[fuzzy]') or datasketch. "
+                         'auto prefers rensa.')
     fg.add_argument('--semantic-dedup', action='store_true',
                     help='Embedding-based near-dedup: drops paraphrases that share no '
                          'n-grams (pip install model2vec; ~30MB model, no torch).')
@@ -197,14 +201,27 @@ def build_parser() -> argparse.ArgumentParser:
                     help='Cosine similarity threshold for --semantic-dedup (default 0.9).')
     fg.add_argument('--semantic-model', default=D.semantic_model, metavar='NAME',
                     help='model2vec static embedding model for --semantic-dedup.')
+    fg.add_argument('--semantic-index', default=D.semantic_index, choices=list(SEMANTIC_INDEXES),
+                    help='Nearest-neighbor index for --semantic-dedup: usearch (HNSW; '
+                         'stays fast as the index grows) or lsh (no extra dependency; '
+                         'slows down on large inputs). auto prefers usearch.')
     fg.add_argument('--dedup-fields', default='')
     fg.add_argument('--dedup-normalize', action='store_true')
     fg.add_argument('--dedup-backend', default=D.dedup_backend, choices=list(DEDUP_BACKENDS))
     fg.add_argument('--dedup-db-path', default=None, metavar='PATH')
     fg.add_argument('--remove-pii', action='store_true')
     fg.add_argument('--pii-mask', action='store_true')
-    fg.add_argument('--pii-pseudonymize', action='store_true')
-    fg.add_argument('--pseudo-map-file', default=None, metavar='PATH')
+    fg.add_argument('--pii-pseudonymize', action='store_true',
+                    help='Replace PII with stable pseudonyms (Person_0001, email_0002@…) '
+                         'instead of [PII_…] tokens.')
+    fg.add_argument('--pseudo-key', default=None, metavar='KEY',
+                    help='Secret for keyed pseudonyms: the same value gets the same '
+                         'pseudonym in every run and worker that uses the key. Prefer the '
+                         'SANITIZE_PSEUDO_KEY environment variable (command lines are '
+                         'visible to other users). With --jobs > 1 and no key, a random '
+                         'per-run key is used.')
+    fg.add_argument('--pseudo-map-file', default=None, metavar='PATH',
+                    help='Write the original -> pseudonym map (sensitive) to PATH.')
     fg.add_argument('--pii-patterns-file', default=None, metavar='PATH')
     fg.add_argument('--pii-ner', action='store_true',
                     help='Also detect PII with a named-entity model (person names by default). '
@@ -343,6 +360,8 @@ class IOPlan:
     excel_sheet: Any
     split_spec: Optional[Dict[str, float]]
     no_output: bool
+    files: List[str]                 # the input files (one for stdin/hf/a single file)
+    multi: bool = False              # --input named a directory or glob
 
 
 @dataclass
@@ -409,6 +428,20 @@ def _merge_settings(args: argparse.Namespace, parser: argparse.ArgumentParser) -
         args.log_level = 'DEBUG'
 
 
+def _resolve_pseudo_key(args: argparse.Namespace, config: SanitizerConfig) -> None:
+    """--pseudo-key, else $SANITIZE_PSEUDO_KEY; with --jobs > 1 and neither,
+    a random key so all workers agree within this run."""
+    if not config.pii_pseudonymize or config.pseudo_key:
+        return
+    config.pseudo_key = os.environ.get('SANITIZE_PSEUDO_KEY') or None
+    if config.pseudo_key is None and args.jobs > 1:
+        import secrets
+        config.pseudo_key = secrets.token_hex(32)
+        logging.info("--pii-pseudonymize with --jobs > 1: using a random per-run key. Set "
+                     "SANITIZE_PSEUDO_KEY (or --pseudo-key) for pseudonyms that are stable "
+                     "across runs.")
+
+
 def _setup_logging(args: argparse.Namespace) -> None:
     eff_level = 'WARNING' if args.quiet else args.log_level
     handler = logging.StreamHandler(sys.stderr)
@@ -427,8 +460,6 @@ def _plan_io(args: argparse.Namespace, config: SanitizerConfig) -> IOPlan:
     """Validate CLI-only options and resolve input/output formats."""
     if args.jobs < 1:
         raise CliError("--jobs must be >= 1.")
-    if config.pii_pseudonymize and args.jobs > 1:
-        raise CliError("--pii-pseudonymize is not supported with --jobs > 1.")
     if args.shard_size is not None and args.shard_size < 1:
         raise CliError("--shard-size must be >= 1.")
     split_spec = None
@@ -438,19 +469,34 @@ def _plan_io(args: argparse.Namespace, config: SanitizerConfig) -> IOPlan:
         split_spec = parse_split_spec(args.split)
 
     is_hub_input = str(args.input).startswith('hf://')
+    multi = is_multi_input(args.input)
+    files = [args.input]
     if is_hub_input:
         from sanitizer_pro.hub import parse_hf_uri
         parse_hf_uri(args.input)  # fail fast on malformed URIs
         input_fmt = 'hf'
+    elif multi:
+        try:
+            files = expand_inputs(args.input, exclude=[args.output])
+        except ValueError as exc:
+            raise CliError(str(exc)) from None
+        formats = {resolve_fmt(f, args.input_format) for f in files}
+        if '' in formats:
+            raise CliError("Cannot detect the format of some input files. Supply --input-format.")
+        input_fmt = formats.pop() if len(formats) == 1 else ''   # '' = mixed formats
+        logging.info(f"Input: {len(files):,} files from {args.input}")
     else:
         input_fmt = resolve_fmt(args.input, args.input_format)
         if not input_fmt:
             raise CliError("Cannot detect input format. Supply --input-format.")
     excel_sheet: Any = 0
-    if input_fmt in {'.xlsx', '.xls'}:
+    if not multi and input_fmt in {'.xlsx', '.xls'}:
         excel_sheet = resolve_excel_sheet(args.excel_sheet_name, args.excel_sheet_index,
                                           args.input if args.input != _STDIN else None)
-    if args.input != _STDIN and not is_hub_input and not os.path.exists(args.input):
+    elif args.excel_sheet_name is not None or args.excel_sheet_index is not None:
+        excel_sheet = resolve_excel_sheet(args.excel_sheet_name, args.excel_sheet_index)
+    if (args.input != _STDIN and not is_hub_input and not multi
+            and not os.path.exists(args.input)):
         raise CliError(f"Input file not found: {args.input}")
 
     if args.output not in {_STDOUT, '/dev/null'}:
@@ -461,7 +507,8 @@ def _plan_io(args: argparse.Namespace, config: SanitizerConfig) -> IOPlan:
         if not (no_output or args.output == '/dev/null'):
             raise CliError("Cannot detect output format. Supply --output-format.")
         output_fmt = input_fmt if input_fmt not in ('', 'hf') else '.jsonl'
-    return IOPlan(input_fmt, output_fmt, is_hub_input, excel_sheet, split_spec, no_output)
+    return IOPlan(input_fmt, output_fmt, is_hub_input, excel_sheet, split_spec, no_output,
+                  files, multi)
 
 
 def _prepare_resume(args: argparse.Namespace, config: SanitizerConfig, plan: IOPlan) -> ResumeState:
@@ -495,7 +542,8 @@ def _prepare_resume(args: argparse.Namespace, config: SanitizerConfig, plan: IOP
     warn_about_volatile_state(args)
     state = ResumeState(skip=int(ckpt['records_read']),
                         stats=RunStats.from_state(ckpt['stats']),
-                        pseudo=PseudoRegistry.from_state(ckpt['pseudo']) if ckpt.get('pseudo') else None,
+                        pseudo=(PseudoRegistry.from_state(ckpt['pseudo'], key=config.pseudo_key)
+                                if ckpt.get('pseudo') else None),
                         dedup_mark=ckpt.get('dedup_mark'))
     logging.info(f"Resuming from checkpoint: skipping {state.skip:,} already-processed "
                  "input records, appending to output.")
@@ -520,12 +568,12 @@ class _Checkpointer:
     """Writes a consistent checkpoint every N input records (single process)."""
 
     def __init__(self, args: argparse.Namespace, sanitizer: Sanitizer) -> None:
-        from sanitizer_pro.dedup import SQLiteDeduper
+        from sanitizer_pro.dedup import is_durable
         self.args, self.s = args, sanitizer
         # Only a named SQLite DB survives the process, so only it is rolled back.
-        self.durable_dedup: Optional[SQLiteDeduper] = (
+        self.durable_dedup: Optional[Any] = (
             sanitizer.deduper if args.resume and args.dedup_db_path
-            and isinstance(sanitizer.deduper, SQLiteDeduper) else None)
+            and is_durable(sanitizer.deduper) else None)
 
     def rollback_dedup(self, mark: Optional[int]) -> None:
         if self.durable_dedup is None:
@@ -572,7 +620,7 @@ def _progress(it: Iterable[Any], args: argparse.Namespace, desc: str) -> Iterabl
 
 
 def _run_pipeline(args: argparse.Namespace, sanitizer: Sanitizer, records: Iterator[Any],
-                  writer: Any, ckpt: _Checkpointer) -> None:
+                  writer: Any, ckpt: _Checkpointer, plan: Optional[IOPlan] = None) -> None:
     def write(out: List[Dict[str, Any]]) -> None:
         if writer is not None:
             for rec in out:
@@ -585,36 +633,118 @@ def _run_pipeline(args: argparse.Namespace, sanitizer: Sanitizer, records: Itera
                 break
             write(sanitizer.feed(record))
             ckpt.maybe_save(writer)
+    elif plan is not None and chunkable(plan.files, resolve_fmt('', args.input_format) or None):
+        _run_parallel(args, sanitizer, write, limit, chunks=list(jsonl_chunks(plan.files)))
     else:
-        def dispatchable() -> Iterator[Dict[str, Any]]:
-            # Non-objects are counted here so `malformed` stays accurate.
-            for rec in records:
-                if isinstance(rec, dict):
-                    yield rec
-                else:
-                    sanitizer.stats.total += 1
-                    sanitizer.stats.malformed += 1
+        _run_parallel(args, sanitizer, write, limit, records=records)
+    write(sanitizer.finish())
 
-        pool = multiprocessing.Pool(processes=args.jobs, initializer=_worker_init,
-                                    initargs=(sanitizer.config, args.log_level))
-        stopped_early = False
-        try:
-            results = pool.imap(_worker_fn, dispatchable(), chunksize=args.chunk_size)
-            for transformed, pii_counts in _progress(results, args, "Processing"):
-                if limit is not None and sanitizer.stats.total >= limit:
+
+class _Window:
+    """Bounds the tasks in flight. Pool.imap's feeder thread otherwise drains
+    the whole input into memory whenever the parent is the slower side.
+    close() unblocks the feeder so an early stop cannot hang."""
+
+    def __init__(self, size: int) -> None:
+        self._slots = threading.Semaphore(size)
+        self._closed = False
+
+    def feed(self, items: Iterable[Any]) -> Iterator[Any]:
+        for item in items:
+            while not self._slots.acquire(timeout=0.2):
+                if self._closed:
+                    return
+            if self._closed:
+                return
+            yield item
+
+    def done(self) -> None:
+        self._slots.release()
+
+    def close(self) -> None:
+        self._closed = True
+
+
+def _run_parallel(args: argparse.Namespace, sanitizer: Sanitizer, write: Any,
+                  limit: Optional[int], *, records: Optional[Iterator[Any]] = None,
+                  chunks: Optional[List[Chunk]] = None) -> None:
+    """--jobs N: workers run the per-record stage; this process consumes their
+    results in input order and runs the stateful stages, so the output and
+    stats are identical to a single-process run.
+
+    With `chunks` (plain JSONL files) workers also read and parse the input;
+    otherwise this process reads and sends records."""
+    stats = sanitizer.stats
+    want_samples = bool(args.report)
+    pool = multiprocessing.Pool(
+        processes=args.jobs, initializer=_worker_init,
+        initargs=(sanitizer.config, args.log_level, args.encoding, want_samples))
+    stopped_early = False
+    bad = 0
+    window = _Window(args.jobs * 4 if chunks is not None else args.jobs * args.chunk_size * 4)
+    progress: Any = None
+
+    def absorb(result: WorkerResult) -> bool:
+        """Feed one worker result; False once the --dry-run limit is reached."""
+        nonlocal bad
+        if limit is not None and stats.total >= limit:
+            return False
+        if result.samples:
+            sanitizer.audit_samples.merge(result.samples)
+        if result.pseudonyms and sanitizer.pseudo_registry is not None:
+            sanitizer.pseudo_registry.merge(list(result.pseudonyms))
+        if result.transformed is None:
+            stats.total += 1
+            stats.malformed += 1
+            bad += 1
+            if chunks is not None and bad <= 5:   # (the parent's reader logs its own)
+                logging.warning(f"Skipping malformed input: {result.problem}")
+            return True
+        write(sanitizer.feed_transformed(result.transformed, result.pii_counts))
+        return True
+
+    try:
+        if chunks is not None:
+            progress = _progress_bar(args, sum(c.end - c.start for c in chunks))
+            for chunk, results in zip(chunks, pool.imap(_worker_chunk, window.feed(chunks))):
+                window.done()
+                for result in results:
+                    if not absorb(result):
+                        stopped_early = True
+                        break
+                if progress is not None:
+                    progress.update(chunk.end - chunk.start)
+                if stopped_early:
+                    break
+            if bad > 5:
+                logging.warning(f"Skipped {bad} malformed input records in total.")
+        else:
+            assert records is not None
+            stream = pool.imap(_worker_fn, window.feed(records), chunksize=args.chunk_size)
+            for result in _progress(stream, args, "Processing"):
+                window.done()
+                if not absorb(result):
                     stopped_early = True
                     break
-                write(sanitizer.feed_transformed(transformed, pii_counts))
-        except BaseException:
-            stopped_early = True
-            raise
-        finally:
-            if stopped_early:
-                pool.terminate()
-            else:
-                pool.close()
-            pool.join()
-    write(sanitizer.finish())
+    except BaseException:
+        stopped_early = True
+        raise
+    finally:
+        if progress is not None:
+            progress.close()
+        window.close()
+        if stopped_early:
+            pool.terminate()
+        else:
+            pool.close()
+        pool.join()
+
+
+def _progress_bar(args: argparse.Namespace, total_bytes: int) -> Any:
+    if TQDM_AVAILABLE and not args.no_progress and not args.quiet:
+        return _tqdm(total=total_bytes, desc="Processing", unit="B", unit_scale=True,
+                     dynamic_ncols=True, smoothing=0.1)
+    return None
 
 
 def _print_summary(args: argparse.Namespace, stats: RunStats) -> None:
@@ -680,7 +810,7 @@ def _write_artifacts(args: argparse.Namespace, config: SanitizerConfig, plan: IO
         (c.redact_secrets, 'secrets redaction'),
         (c.pii_pseudonymize, 'pseudonymization'),
         (c.deduplicate, f'exact dedup ({c.dedup_backend})'),
-        (c.fuzzy_dedup, f'fuzzy dedup (t={c.fuzzy_threshold})'),
+        (c.fuzzy_dedup, f'fuzzy dedup (t={c.fuzzy_threshold}, {c.dedup_backend})'),
         (c.semantic_dedup, f'semantic dedup (t={c.semantic_threshold})'),
         (bool(c.decontaminate or c.decontam_refs),
          'decontamination' + (f" ({','.join(c.decontaminate)})" if c.decontaminate else '')),
@@ -691,7 +821,8 @@ def _write_artifacts(args: argparse.Namespace, config: SanitizerConfig, plan: IO
         (bool(c.lang_filter), f"language filter ({','.join(c.lang_filter or [])})"),
     ] if enabled]
     meta = {
-        'Input': f"{args.input} ({plan.input_fmt})",
+        'Input': (f"{args.input} ({len(plan.files):,} files)" if plan.multi
+                  else f"{args.input} ({plan.input_fmt})"),
         'Output': f"{args.output} ({plan.output_fmt}){_mode_tag(args)}",
         'Profile': args.profile or '—',
         'Active features': ', '.join(features) or 'none',
@@ -716,6 +847,7 @@ def main() -> None:
 
     try:
         config = SanitizerConfig.from_namespace(args)
+        _resolve_pseudo_key(args, config)
         config.validate()
         plan = _plan_io(args, config)
         resume = _prepare_resume(args, config, plan)
@@ -743,12 +875,18 @@ def main() -> None:
                  f"| jobs={args.jobs}")
     started = time.monotonic()
     try:
-        records: Iterator[Any] = read_records(
-            args.input, encoding=args.encoding, paragraph_mode=args.paragraph_mode,
+        if plan.is_hub_input:
+            fmt = None
+        elif plan.multi:
+            fmt = resolve_fmt('', args.input_format) or None   # else each file's extension
+        else:
+            fmt = plan.input_fmt
+        records: Iterator[Any] = iter_files(
+            plan.files, input_format=fmt, encoding=args.encoding,
+            paragraph_mode=args.paragraph_mode,
             csv_delimiter=args.csv_delimiter, csv_no_header=args.csv_no_header,
             csv_columns=as_list(args.csv_columns), excel_sheet=plan.excel_sheet,
             excel_warn_mb=args.excel_warn_size,
-            input_format=None if plan.is_hub_input else plan.input_fmt,
             json_path=args.json_path, hf_cache=args.hf_cache, yield_malformed=True)
     except Exception as exc:
         logging.critical(f"Failed to open input: {exc}"); sys.exit(1)
@@ -759,7 +897,7 @@ def main() -> None:
     try:
         writer_ctx = _open_writer(args, plan, appending=resume.stats is not None)
         with writer_ctx as writer:
-            _run_pipeline(args, sanitizer, records, writer, ckpt)
+            _run_pipeline(args, sanitizer, records, writer, ckpt, plan)
         if args.resume:
             from sanitizer_pro.checkpoint import clear_checkpoint
             clear_checkpoint(args.output)

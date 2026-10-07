@@ -31,13 +31,23 @@ def checkpoint_path(output_path: str) -> str:
     return output_path + '.checkpoint.json'
 
 
-def input_fingerprint(input_path: str) -> Dict[str, Any]:
-    """Identity of the input so a checkpoint is never applied to different data."""
+def _file_identity(path: str) -> Dict[str, Any]:
+    st = os.stat(path)
+    return {'path': os.path.abspath(path), 'size': st.st_size, 'mtime': round(st.st_mtime, 3)}
+
+
+def input_fingerprint(input_path: str, output_path: Optional[str] = None) -> Dict[str, Any]:
+    """Identity of the input so a checkpoint is never applied to different
+    data. For a directory or glob: every file it expands to (a file added,
+    removed or changed invalidates the checkpoint)."""
     if input_path.startswith('hf://'):
         return {'kind': 'hf', 'uri': input_path}
-    st = os.stat(input_path)
-    return {'kind': 'file', 'path': os.path.abspath(input_path),
-            'size': st.st_size, 'mtime': round(st.st_mtime, 3)}
+    from sanitizer_pro.io.sources import expand_inputs, is_multi_input
+    if is_multi_input(input_path):
+        files = expand_inputs(input_path, exclude=[output_path] if output_path else [])
+        return {'kind': 'files', 'spec': input_path,
+                'files': [_file_identity(f) for f in files]}
+    return {'kind': 'file', **_file_identity(input_path)}
 
 
 def save_checkpoint(output_path: str, *, input_path: str, records_read: int,
@@ -47,7 +57,7 @@ def save_checkpoint(output_path: str, *, input_path: str, records_read: int,
                     dedup_mark: Optional[int] = None) -> None:
     payload = {
         'version': CHECKPOINT_VERSION,
-        'input': input_fingerprint(input_path),
+        'input': input_fingerprint(input_path, output_path),
         'records_read': records_read,
         'stats': stats_state,
         'pseudo': pseudo_state,
@@ -76,7 +86,7 @@ def load_checkpoint(output_path: str, input_path: str) -> Optional[Dict[str, Any
         raise ConfigurationError(
             f"Checkpoint {path} has unsupported version {payload.get('version')}. "
             "Delete it to start fresh.")
-    current = input_fingerprint(input_path)
+    current = input_fingerprint(input_path, output_path)
     if payload.get('input') != current:
         raise ConfigurationError(
             f"Checkpoint {path} was created for a different input "
@@ -118,7 +128,8 @@ def warn_about_volatile_state(args: Any) -> None:
             "--resume with in-memory dedup: duplicate detection restarts empty on "
             "resume. Use --dedup-backend sqlite --dedup-db-path PATH for exact "
             "cross-resume dedup.")
-    if getattr(args, 'fuzzy_dedup', False):
-        logging.warning("--resume with --fuzzy-dedup: the MinHash index restarts "
-                        "empty on resume; near-duplicates across the boundary may "
-                        "slip through.")
+    if (getattr(args, 'fuzzy_dedup', False)
+            and (args.dedup_backend != 'sqlite' or not args.dedup_db_path)):
+        logging.warning("--resume with an in-memory --fuzzy-dedup index: it restarts "
+                        "empty on resume, so near-duplicates across the boundary may "
+                        "slip through. Use --dedup-backend sqlite --dedup-db-path PATH.")

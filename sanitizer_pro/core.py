@@ -14,7 +14,7 @@ from sanitizer_pro.settings import FieldOps, PiiPattern, SanitizerConfig
 from sanitizer_pro.utils import FilterReason, _MAX_DEPTH_DEFAULT
 from sanitizer_pro.pii import clean_text, redact_pii, PseudoRegistry
 from sanitizer_pro.secrets import redact_secrets as _redact_secrets_fn
-from sanitizer_pro.quality import extract_text_for_quality, _check_quality_reason, detect_language, is_code_heuristic, contains_profanity
+from sanitizer_pro.quality import extract_text_for_quality, _check_quality_reason, detect_language, is_code_heuristic, contains_profanity, words_of
 
 __all__ = ['FieldOps', 'RecordTransformer', 'TokenTruncator', 'Transformed', 'format_chatml',
            'format_instruct', 'get_record_hash', 'make_report_redactor', 'sanitize_record']
@@ -118,6 +118,9 @@ class Transformed(NamedTuple):
     lang: Optional[str]
     detail: Optional[str] = None      # e.g. the failing quality rule
     score: Optional[float] = None     # quality score, when scoring is enabled
+    # Computed here so worker processes, not the parent, pay for them:
+    n_words: Optional[int] = None     # words in quality_text (stats histogram)
+    dedup_key: Optional[str] = None   # exact-dedup hash, when exact dedup is on
 
 
 def sanitize_record(
@@ -231,11 +234,17 @@ class RecordTransformer:
 
     def transform(self, record: Any, pseudo_registry: Optional[PseudoRegistry] = None,
                   pii_counters: Optional[Dict[str, int]] = None) -> Transformed:
-        return sanitize_record(
+        t = sanitize_record(
             record, self.config, pseudo_registry=pseudo_registry, pii_counters=pii_counters,
             truncator=self.truncator, ner_redactor=self.ner, lang_filter=self.lang_filter,
             quality_fn=self.quality_fn, lang_identifier=self.lang_identifier,
             scorer=self.scorer)
+        if t.record is None:
+            return t
+        c = self.config
+        key = (get_record_hash(t.record, c.dedup_fields, c.dedup_normalize)
+               if c.deduplicate and not (c.fuzzy_dedup or c.semantic_dedup) else None)
+        return t._replace(n_words=len(words_of(t.quality_text)), dedup_key=key)
 
     def report_redactor(self) -> Optional[Callable[[Any], Any]]:
         c = self.config

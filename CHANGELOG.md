@@ -2,8 +2,9 @@
 
 ## Unreleased (planned 4.0.0)
 
-Phases 1–3 of the audit plan (`docs/AUDIT_2026-10.md`): data-integrity, privacy and
-detection-quality fixes, one shared pipeline engine, then current detection backends.
+Phases 1–4 of the audit plan (`docs/AUDIT_2026-10.md`): data-integrity, privacy and
+detection-quality fixes, one shared pipeline engine, current detection backends, then
+scale.
 
 ### Behavior changes: read before upgrading
 
@@ -45,6 +46,15 @@ detection-quality fixes, one shared pipeline engine, then current detection back
   parts or `tool_calls` used to fail as `missing_messages` / `bad_message_schema`;
   they are now validated. A `tool` turn that follows a structured tool call must
   answer it (`orphan_tool_result`, `unanswered_tool_call`).
+- **`--fuzzy-dedup` uses a new algorithm.** LSH finds candidates with high recall, and
+  each candidate is checked against its stored MinHash signature. Rensa computes the
+  signatures when installed. The records flagged differ from 3.0's datasketch LSH:
+  more true near-duplicates are caught, fewer distinct records are dropped.
+  `--dedup-backend sqlite` now also applies to fuzzy dedup and puts its index on disk.
+- **`--semantic-dedup` uses a usearch HNSW index when usearch is installed.** It
+  matched exact search on 99.9% of decisions, against 98% for the LSH index.
+- **`--input` values that are directories or glob patterns are expanded** to the files
+  they match. A path that exists is always read as-is.
 - **Malformed input lines now count in `malformed`.** This shifts how input positions
   are counted. Finish any `--resume` run that was started with 3.0 *before* upgrading.
 
@@ -83,6 +93,34 @@ detection-quality fixes, one shared pipeline engine, then current detection back
   - With an HF `--tokenizer` that has a chat template, `--chat-max-tokens` counts the
     rendered conversation.
 
+- **Faster per-record path.**
+  - No flags: 12.6k rec/s, up from 5.2k (100k synthetic records, one core).
+  - `--remove-pii --redact-secrets`: 7.1k rec/s, up from 1.7k.
+  - Each regex pattern now runs only when the text contains a literal the pattern
+    needs, and those literals are found in one pass.
+  - Output is byte-identical to the previous version.
+- **Scale-out.**
+  - `--input` takes directories and globs.
+  - With `--jobs N` on JSONL, workers read and parse byte-range chunks themselves.
+  - `--jobs 4` runs at 20.6k rec/s, up from 6.3k.
+  - Output, stats, report samples and pseudonym maps are identical to `--jobs 1`.
+- **Keyed pseudonyms** (`--pseudo-key` / `SANITIZE_PSEUDO_KEY`): HMAC-derived, so they
+  are the same across worker processes and runs. `--pii-pseudonymize` now works with
+  `--jobs > 1`.
+- **Fuzzy dedup:**
+  - `--fuzzy-backend {auto,rensa,datasketch}`, plus a `[fuzzy]` extra for rensa.
+  - 6.1k rec/s, up from 455.
+  - At thresholds 0.7–0.85: 97–98% recall at or above the threshold, and no false
+    positives 0.15 or more below it.
+  - The index can live on disk: flat ~140 MB peak memory at 500k records.
+  - It survives `--resume` with `--dedup-db-path`.
+- **`--semantic-index {auto,usearch,lsh}`**; usearch joins the `[semantic]` extra.
+- **`benchmarks/`:**
+  - throughput scenarios (rec/s, MB/s, peak RSS, `--jobs` scaling), run nightly in CI
+    with regression targets
+  - `fuzzy_recall.py`: fuzzy dedup against exact Jaccard
+  - `semantic_recall.py`: the semantic index against exact search
+
 ### Changed
 
 - **One engine for the CLI and the library.** `SanitizerConfig` (now in
@@ -100,6 +138,11 @@ detection-quality fixes, one shared pipeline engine, then current detection back
 
 ### Fixed
 
+- With `--jobs`, the pool's feeder thread could read the whole input into memory when
+  the parent was slower than the workers. It also updated the malformed counters
+  concurrently with the main thread.
+- With `--jobs`, the audit report had no samples of records dropped by the per-record
+  gates and no PII diffs.
 - International phone numbers with more than four digit groups
   (`+33 1 42 68 53 07`) were only partly redacted.
 - NER detectors could return overlapping spans for the same text, which mangled

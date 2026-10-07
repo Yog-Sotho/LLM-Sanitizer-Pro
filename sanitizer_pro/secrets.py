@@ -15,7 +15,10 @@ import re
 from collections import Counter
 from typing import Callable, Dict, List, Match, Optional, Tuple
 
-from sanitizer_pro.pii import _TRIMMERS, _VALIDATORS, PseudoRegistry, _trim_url, apply_patterns
+from sanitizer_pro.pii import (
+    _GATES, _TRIMMERS, _VALIDATORS, Gate, PseudoRegistry, _trim_url, apply_patterns,
+    combined_patterns,
+)
 
 # Each entry: (compiled regex, replacement token, kind). Kinds are stable
 # identifiers surfaced in stats/audit reports. Patterns are deliberately
@@ -112,6 +115,34 @@ def _is_generic_secret(text: str, m: Match[str]) -> bool:
 _VALIDATORS[_GENERIC_RE] = _is_generic_secret
 _TRIMMERS[_CONNECTION_RE] = _trim_url
 
+# Prefilters (see pii.Gate): the literal every pattern's match must contain.
+_SECRET_GATES = [
+    Gate(('-----BEGIN ',)),
+    Gate(('AKIA', 'ASIA')),
+    Gate.ignorecase('aws'),
+    Gate(('ghp_', 'gho_', 'ghu_', 'ghs_', 'ghr_')),
+    Gate(('github_pat_',)),
+    Gate(('glpat-', 'glptt-', 'gldt-', 'glrt-', 'glsoat-', 'glcbt-', 'glft-')),
+    Gate(('hf_', 'api_org_')),
+    Gate(('sk-ant-',)),
+    Gate(('sk-',)),
+    Gate(('AIza',)),
+    Gate(('xox',)),
+    Gate(('k_live_', 'k_test_')),
+    Gate(('SK',)),
+    Gate(('SG.',)),
+    Gate(('npm_',)),
+    Gate(('pypi-AgEIcHlwaS5vcmc',)),
+    Gate.ignorecase('accountkey='),
+    Gate(('eyJ',)),
+    Gate.ignorecase('bearer'),
+    Gate(('://',)),
+    # every keyword alternative contains one of these
+    Gate.ignorecase('api', 'secret', 'private', 'access', 'auth', 'passw'),
+]
+assert len(_SECRET_GATES) == len(_SECRET_PATTERNS)
+_GATES.update((p, g) for (p, _, _), g in zip(_SECRET_PATTERNS, _SECRET_GATES))
+
 SECRET_KINDS = tuple(dict.fromkeys(kind for _, _, kind in _SECRET_PATTERNS))
 
 
@@ -147,7 +178,7 @@ def redact_secrets(
     if pseudo_registry is not None:
         _install_pseudo_templates(pseudo_registry)
     return apply_patterns(
-        text, _SECRET_PATTERNS + (extra_patterns or []),
+        text, combined_patterns(_SECRET_PATTERNS, extra_patterns),
         mask=mask, pseudo_registry=pseudo_registry, counters=counters,
         mask_fns=_SECRET_MASK_FNS)
 

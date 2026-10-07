@@ -1,0 +1,36 @@
+name: Benchmarks
+
+# Throughput regression guard (benchmarks/bench.py). Nightly, on demand, and
+# on pull requests that change the benchmarks themselves.
+on:
+  schedule:
+    - cron: '17 3 * * *'
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'benchmarks/**'
+      - '.github/workflows/bench.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  bench:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e . datasketch rensa
+      - name: Run benchmarks
+        run: python -m benchmarks.bench --records 50000 --check --json bench.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: bench-results
+          path: bench.json

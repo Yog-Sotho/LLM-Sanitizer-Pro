@@ -8,7 +8,7 @@ import difflib
 import html
 import json
 from datetime import datetime, timezone
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 
 _MAX_SAMPLES_PER_REASON = 5
 _SAMPLE_TRUNCATE = 400
@@ -120,6 +120,19 @@ class AuditSampleCollector:
         pair = (self._truncate(b), self._truncate(a))
         if pair not in self.pii_diffs:  # duplicates are redacted before dedup drops them
             self.pii_diffs.append(pair)
+
+    def merge(self, samples: Iterable[Tuple[str, Any]]) -> None:
+        """Add samples a worker process collected (already redacted there)."""
+        for kind, payload in samples:
+            if kind == 'dropped':
+                reason, snippet = payload
+                bucket = self.dropped.setdefault(reason, [])
+                if len(bucket) < self.max_per_reason:
+                    bucket.append(snippet)
+            elif kind == 'diff':
+                pair = (payload[0], payload[1])
+                if self.wants_pii_diffs and pair not in self.pii_diffs:
+                    self.pii_diffs.append(pair)
 
     @property
     def wants_pii_diffs(self) -> bool:

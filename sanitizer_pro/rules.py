@@ -33,7 +33,7 @@ TERMINAL_PUNCTUATION = frozenset(
     "𖩮𖩯𖫵𖬷𖬸𖭄𖺘𛲟𝪈")
 _TERMINAL = tuple(TERMINAL_PUNCTUATION)
 
-_W = rf'(?:(?![{_UNSPACED}])\w)'
+_W = rf'[^\W{_UNSPACED}]'  # \w minus unspaced scripts
 # Mirrors spaCy's default tokenization closely enough for these ratios: a
 # character per token for unspaced scripts, numbers with separators kept
 # whole, apostrophe suffixes attached ('s), and punctuation runs as one token.

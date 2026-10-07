@@ -7,7 +7,7 @@ directly. Field names match the CLI flags (``--min-chars`` -> ``min_chars``).
 """
 import argparse
 import re
-from dataclasses import dataclass, fields
+from dataclasses import dataclass, field, fields
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 from sanitizer_pro.utils import _MAX_DEPTH_DEFAULT, ConfigurationError
@@ -16,6 +16,8 @@ PiiPattern = Tuple['re.Pattern[str]', str, str]          # (compiled regex, toke
 FieldOps = Tuple[Dict[str, str], Set[str], Set[str], Set[str]]  # renames, drops, pii_only, no_clean
 
 DEDUP_BACKENDS = ('memory', 'sqlite')
+FUZZY_BACKENDS = ('auto', 'rensa', 'datasketch')
+SEMANTIC_INDEXES = ('auto', 'usearch', 'lsh')
 QUALITY_SCORERS = ('heuristic', 'perplexity', 'fineweb-edu', 'dclm', 'fasttext')
 NER_BACKENDS = ('auto', 'spacy', 'transformers', 'gliner')
 
@@ -29,6 +31,9 @@ class SanitizerConfig:
     remove_pii: bool = False
     pii_mask: bool = False
     pii_pseudonymize: bool = False
+    # HMAC key for pseudonyms that are stable across worker processes and runs
+    # (kept out of repr so it never lands in logs).
+    pseudo_key: Optional[str] = field(default=None, repr=False)
     pii_ner: bool = False
     pii_ner_backend: str = 'auto'
     pii_ner_entities: Tuple[str, ...] = ('person',)
@@ -65,9 +70,11 @@ class SanitizerConfig:
     deduplicate: bool = False
     fuzzy_dedup: bool = False
     fuzzy_threshold: float = 0.8
+    fuzzy_backend: str = 'auto'
     semantic_dedup: bool = False
     semantic_threshold: float = 0.9
     semantic_model: str = 'minishlab/potion-base-8M'
+    semantic_index: str = 'auto'
     dedup_backend: str = 'memory'
     dedup_db_path: Optional[str] = None
     dedup_fields: Optional[List[str]] = None
@@ -130,6 +137,10 @@ class SanitizerConfig:
         _require(not (self.semantic_dedup and self.fuzzy_dedup),
                  "semantic_dedup and fuzzy_dedup are mutually exclusive "
                  "(both compare quality text; pick one).")
+        _require(self.semantic_index in SEMANTIC_INDEXES,
+                 f"semantic_index must be one of {list(SEMANTIC_INDEXES)}.")
+        _require(self.fuzzy_backend in FUZZY_BACKENDS,
+                 f"fuzzy_backend must be one of {list(FUZZY_BACKENDS)}.")
         _require(self.dedup_backend in DEDUP_BACKENDS,
                  f"dedup_backend must be one of {list(DEDUP_BACKENDS)}.")
         _require(self.quality_scorer in QUALITY_SCORERS,
