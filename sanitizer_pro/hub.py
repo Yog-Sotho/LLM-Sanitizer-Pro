@@ -257,11 +257,30 @@ def iter_parquet_texts(repo: str, parts: Tuple[Tuple[str, str], ...],
                             yield v
 
 
+def resolve_model_file(repo: str, filename: str, revision: str = 'main') -> Path:
+    """Local path of a model file from the Hub: huggingface_hub's cache when
+    that library is installed, else this package's own cache and downloader."""
+    try:
+        from huggingface_hub import hf_hub_download
+        return Path(hf_hub_download(repo, filename, revision=revision))
+    except ImportError:
+        pass
+    cache = Path(os.path.expanduser(os.path.join(
+        '~', '.cache', 'llm-sanitizer-pro', 'models', repo.replace('/', '__'), revision)))
+    dest = cache / filename
+    if not dest.exists():
+        cache.mkdir(parents=True, exist_ok=True)
+        logging.info(f"Downloading {repo}/{filename} (one-time) …")
+        http_download(f"https://huggingface.co/{repo}/resolve/{revision}/{filename}", dest)
+    return dest
+
+
 def is_hub_uri(path: Optional[str]) -> bool:
     return bool(path) and str(path).startswith(HF_URI_PREFIX)
 
 
 __all__ = ['HFDatasetRef', 'HF_URI_PREFIX', 'download_parquet', 'http_download', 'http_get',
+           'resolve_model_file',
            'is_hf_host', 'is_hub_uri',
            'iter_hub_records', 'iter_parquet_texts', 'list_parquet', 'parse_hf_uri',
            'resolve_parquet_urls', 'InputFormatError']

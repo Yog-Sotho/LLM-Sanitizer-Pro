@@ -164,9 +164,18 @@ def build_parser() -> argparse.ArgumentParser:
     qg.add_argument('--reject-profanity', action='store_true', help='Reject records containing profanity.')
     qg.add_argument('--quality-scorer', default=D.quality_scorer, choices=list(QUALITY_SCORERS),
                     help='Scoring backend for --quality-min-score / --keep-top-percent / '
-                         '--quality-score-field (default: heuristic, no dependencies).')
+                         '--quality-score-field: heuristic (default, no dependencies), '
+                         'perplexity, fineweb-edu (classifier, 0-5 mapped to 0-1), dclm '
+                         '(fastText, P(high quality)), or fasttext (your own model).')
     qg.add_argument('--quality-model', default=None, metavar='NAME',
-                    help='Causal LM for the perplexity scorer (default: distilgpt2).')
+                    help='Model for the scorer: causal LM for perplexity (default distilgpt2), '
+                         'HF model for fineweb-edu, or a fastText .bin for fasttext.')
+    qg.add_argument('--quality-label', default=None, metavar='LABEL',
+                    help="Positive label of a --quality-scorer fasttext model (e.g. __label__hq).")
+    qg.add_argument('--quality-rules', default='', metavar='SETS',
+                    help='Reject documents failing published pretraining rules: gopher, '
+                         'gopher-repetition, c4, fineweb (comma-separated, or all). '
+                         'English-tuned; thresholds as in datatrove.')
     qg.add_argument('--quality-min-score', type=float, default=None, metavar='X',
                     help='Reject records with quality score < X (scores are in [0, 1]).')
     qg.add_argument('--keep-top-percent', type=float, default=None, metavar='P',
@@ -607,6 +616,7 @@ def _print_summary(args: argparse.Namespace, stats: RunStats) -> None:
     rows = [
         ("Total records processed", total), ("Kept", None),
         ("Filtered (quality)", stats.filtered_quality),
+        ("Filtered (rules)", stats.filtered_rules),
         ("Filtered (language)", stats.filtered_lang),
         ("Filtered (require)", stats.filtered_require),
         ("Filtered (code)", stats.filtered_code),
@@ -621,6 +631,10 @@ def _print_summary(args: argparse.Namespace, stats: RunStats) -> None:
     for label, value in rows:
         shown = f"{stats.kept:,}  ({kept_pct:.2f}%)" if value is None else f"{value:,}"
         lines.append(f"{label:<24}: {shown}")
+    if stats.rule_failures:
+        top = ', '.join(f"{k}={v}" for k, v in sorted(
+            stats.rule_failures.items(), key=lambda x: -x[1])[:5])
+        lines.append(f"  rule failures: {top}")
     if stats.chat_invalid_reasons:
         top = ', '.join(f"{k}={v}" for k, v in sorted(
             stats.chat_invalid_reasons.items(), key=lambda x: -x[1])[:5])
@@ -655,7 +669,8 @@ def _write_artifacts(args: argparse.Namespace, config: SanitizerConfig, plan: IO
         (bool(c.decontaminate or c.decontam_refs),
          'decontamination' + (f" ({','.join(c.decontaminate)})" if c.decontaminate else '')),
         (c.validate_chat, 'chat validation'),
-        (sanitizer._scorer is not None, f'quality scoring ({c.quality_scorer})'),
+        (sanitizer.transformer.scorer is not None, f'quality scoring ({c.quality_scorer})'),
+        (bool(c.quality_rules), f"quality rules ({','.join(c.quality_rules or [])})"),
         (c.clean_html, 'HTML stripping'),
         (bool(c.lang_filter), f"language filter ({','.join(c.lang_filter or [])})"),
     ] if enabled]

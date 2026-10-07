@@ -13,8 +13,6 @@ and ``zh-cn``, because every detected code is expanded to its aliases,
 including the ISO 639-1 code of its macrolanguage (``arz`` -> ``ar``).
 """
 import logging
-import os
-from pathlib import Path
 from typing import Any, Dict, Iterable, Optional, Protocol, Set, Tuple
 
 from sanitizer_pro.utils import ConfigurationError
@@ -114,6 +112,7 @@ class FastTextIdentifier:
             raise ImportError(
                 f"Language backend '{name}' needs fastText: pip install 'llm-sanitizer-pro[lang]'"
             ) from None
+        from sanitizer_pro.hub import resolve_model_file
         path = model_path or str(resolve_model_file(*FASTTEXT_MODELS[name]))
         self._model = fasttext.load_model(path)
 
@@ -125,25 +124,6 @@ class FastTextIdentifier:
         if not labels:
             return None, 0.0
         return str(labels[0]).replace('__label__', ''), min(1.0, float(probs[0]))
-
-
-def resolve_model_file(repo: str, filename: str, revision: str = 'main') -> Path:
-    """Local path of a model file from the Hub: huggingface_hub's cache when
-    that library is installed, else this package's own cache and downloader."""
-    try:
-        from huggingface_hub import hf_hub_download
-        return Path(hf_hub_download(repo, filename, revision=revision))
-    except ImportError:
-        pass
-    from sanitizer_pro.hub import http_download
-    cache = Path(os.path.expanduser(os.path.join(
-        '~', '.cache', 'llm-sanitizer-pro', 'models', repo.replace('/', '__'), revision)))
-    dest = cache / filename
-    if not dest.exists():
-        cache.mkdir(parents=True, exist_ok=True)
-        logging.info(f"Downloading {repo}/{filename} (one-time) …")
-        http_download(f"https://huggingface.co/{repo}/resolve/{revision}/{filename}", dest)
-    return dest
 
 
 def fasttext_available() -> bool:

@@ -7,6 +7,8 @@ from typing import Any, Callable, Dict, List, NamedTuple, Optional, Set
 
 from sanitizer_pro.langid import LanguageIdentifier, make_language_identifier, normalize_filter
 from sanitizer_pro.langid import matches as lang_matches
+from sanitizer_pro.rules import check_rules
+from sanitizer_pro.scoring import Scorer, make_scorer
 from sanitizer_pro.settings import FieldOps, PiiPattern, SanitizerConfig
 from sanitizer_pro.utils import FilterReason, _MAX_DEPTH_DEFAULT
 from sanitizer_pro.pii import clean_text, redact_pii, PseudoRegistry
@@ -113,6 +115,8 @@ class Transformed(NamedTuple):
     reason: Optional[FilterReason]
     quality_text: str
     lang: Optional[str]
+    detail: Optional[str] = None      # e.g. the failing quality rule
+    score: Optional[float] = None     # quality score, when scoring is enabled
 
 
 def sanitize_record(
@@ -124,6 +128,7 @@ def sanitize_record(
     lang_filter: Optional[Set[str]] = None,
     quality_fn: Optional[Callable[[Dict[str, Any]], bool]] = None,
     lang_identifier: Optional[LanguageIdentifier] = None,
+    scorer: Optional[Scorer] = None,
 ) -> Transformed:
     """Clean, redact and gate one record (no cross-record state besides the
     optional pseudonym registry). Optional resources are normally supplied by
@@ -161,6 +166,13 @@ def sanitize_record(
         return Transformed(None, FilterReason.PROFANITY, '', None)
     if _check_quality_reason(quality_text, c):
         return Transformed(None, FilterReason.QUALITY, '', None)
+    if c.quality_rules:
+        # Document-level rules see the whole record, not the 8 KB scoring slice.
+        full_text = extract_text_for_quality(sanitized, text_fields=c.text_fields,
+                                             max_depth=c.text_fields_depth, max_chars=None)
+        failed = check_rules(full_text, c.quality_rules)
+        if failed:
+            return Transformed(None, FilterReason.RULES, '', None, detail=failed)
     if quality_fn and not quality_fn(sanitized):
         return Transformed(None, FilterReason.QUALITY, '', None)
 
@@ -179,7 +191,8 @@ def sanitize_record(
     elif c.format_instruct:
         sanitized = format_instruct(sanitized)
 
-    return Transformed(sanitized, None, quality_text, detected_lang)
+    score = scorer.score(quality_text) if scorer is not None else None
+    return Transformed(sanitized, None, quality_text, detected_lang, score=score)
 
 
 class RecordTransformer:
@@ -203,6 +216,11 @@ class RecordTransformer:
         if config.quality_script:
             from sanitizer_pro.config import load_quality_script
             self.quality_fn = load_quality_script(config.quality_script)
+        self.scorer: Optional[Scorer] = None
+        if (config.quality_min_score is not None or config.keep_top_percent is not None
+                or config.quality_score_field):
+            self.scorer = make_scorer(config.quality_scorer, model=config.quality_model,
+                                      label=config.quality_label)
         self.ner = ner_redactor
         if self.ner is None and config.pii_ner and config.remove_pii:
             from sanitizer_pro.ner import NERRedactor
@@ -214,7 +232,8 @@ class RecordTransformer:
         return sanitize_record(
             record, self.config, pseudo_registry=pseudo_registry, pii_counters=pii_counters,
             truncator=self.truncator, ner_redactor=self.ner, lang_filter=self.lang_filter,
-            quality_fn=self.quality_fn, lang_identifier=self.lang_identifier)
+            quality_fn=self.quality_fn, lang_identifier=self.lang_identifier,
+            scorer=self.scorer)
 
     def report_redactor(self) -> Optional[Callable[[Any], Any]]:
         c = self.config

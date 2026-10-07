@@ -40,47 +40,47 @@ class TestGetRecordHash:
 class TestSanitizeRecord:
     def test_basic_pass(self):
         rec = {"text": "a perfectly fine record"}
-        out, reason, qtext, lang = sanitize_record(rec, make_args())
+        out, reason, qtext, lang = sanitize_record(rec, make_args())[:4]
         assert reason is None and out == rec and "perfectly" in qtext
 
     def test_non_dict_rejected(self):
-        out, reason, _, _ = sanitize_record("not a dict", make_args())
+        out, reason, _, _ = sanitize_record("not a dict", make_args())[:4]
         assert out is None and reason == FilterReason.QUALITY
 
     def test_quality_min_chars(self):
-        out, reason, _, _ = sanitize_record({"text": "hi"}, make_args(min_chars=50))
+        out, reason, _, _ = sanitize_record({"text": "hi"}, make_args(min_chars=50))[:4]
         assert out is None and reason == FilterReason.QUALITY
 
     def test_require_fields(self):
         out, reason, _, _ = sanitize_record(
             {"text": "long enough text", "label": ""},
-            make_args(require_fields=["label"]))
+            make_args(require_fields=["label"]))[:4]
         assert out is None and reason == FilterReason.REQUIRE
 
     def test_pii_removed_recursively(self):
         rec = {"nested": {"deep": ["email me: a@b.co plus other words"]}}
         args = make_args(remove_pii=True)
-        out, reason, _, _ = sanitize_record(rec, args)
+        out, reason, _, _ = sanitize_record(rec, args)[:4]
         assert reason is None
         assert out["nested"]["deep"][0] == "email me: [PII_EMAIL] plus other words"
 
     def test_field_ops_drop_and_rename(self):
         rec = {"secret": "x", "old": "some sufficiently long text value"}
         field_ops = ({"old": "new"}, {"secret"}, set(), set())
-        out, reason, _, _ = sanitize_record(rec, make_args(field_ops=field_ops))
+        out, reason, _, _ = sanitize_record(rec, make_args(field_ops=field_ops))[:4]
         assert reason is None
         assert "secret" not in out and out["new"] == "some sufficiently long text value"
 
     def test_profanity_filter(self):
         out, reason, _, _ = sanitize_record(
             {"text": "this is fucking unacceptable content right here"},
-            make_args(reject_profanity=True))
+            make_args(reject_profanity=True))[:4]
         assert out is None and reason == FilterReason.PROFANITY
 
     def test_code_filter(self):
         out, reason, _, _ = sanitize_record(
             {"text": "def main():\n    import os\n    print(os.name)"},
-            make_args(reject_code=True))
+            make_args(reject_code=True))[:4]
         assert out is None and reason == FilterReason.CODE
 
 

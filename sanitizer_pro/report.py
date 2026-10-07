@@ -16,6 +16,7 @@ _SAMPLE_TRUNCATE = 400
 _REASON_LABELS = {
     'malformed': 'Malformed (not a JSON object)',
     'quality': 'Quality gates (length / words / ratios)',
+    'rules': 'Quality rules (Gopher / C4 / FineWeb)',
     'language': 'Language filter',
     'require_fields': 'Missing required fields',
     'code': 'Code detection',
@@ -147,6 +148,7 @@ def _drop_items(stats: Dict[str, Any]) -> List[Tuple[str, int]]:
     mapping = [
         ('malformed', stats.get('malformed', 0)),
         ('quality', stats.get('filtered_quality', 0)),
+        ('rules', stats.get('filtered_rules', 0)),
         ('language', stats.get('filtered_language', 0)),
         ('require_fields', stats.get('filtered_require', 0)),
         ('code', stats.get('filtered_code', 0)),
@@ -203,6 +205,13 @@ def generate_report_html(
         sections.append(f"""
         <section><h2>Chat validation failures</h2>
         {_bar_rows(items, stats.get('filtered_chat_invalid', 0), '--series-1')}</section>""")
+
+    rule_failures = stats.get('rule_failures') or {}
+    if rule_failures:
+        items = list(rule_failures.items())[:15]
+        sections.append(f"""
+        <section><h2>Quality rule failures</h2>
+        {_bar_rows(items, stats.get('filtered_rules', 0), '--series-1')}</section>""")
 
     score_hist = stats.get('quality_score_histogram') or {}
     if score_hist:
