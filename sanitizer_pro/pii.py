@@ -1,33 +1,58 @@
 """PII detection, masking, pseudonymization, and safe HTML stripping."""
+import html
 import ipaddress
 import re
 import unicodedata
-from html.parser import HTMLParser
 from typing import Callable, Dict, List, Optional, Tuple
 
-class MLStripper(HTMLParser):
-    """Safe HTML tag stripper using standard library state machine."""
-    def __init__(self) -> None:
-        super().__init__()
-        self.reset()
-        self.strict = False
-        self.convert_charrefs = True
-        self.text: List[str] = []
+_BLOCK_TAGS = frozenset(
+    'address article aside blockquote body br caption dd details dialog div dl dt '
+    'fieldset figcaption figure footer form h1 h2 h3 h4 h5 h6 head header hr html li '
+    'main nav ol p pre section summary table tbody tfoot thead title tr ul'.split())
+_INLINE_TAGS = frozenset(
+    'a abbr b bdi bdo big button cite code data del dfn em font i img input ins kbd '
+    'label link mark meta meter q s samp small span strong sub sup td th time tt u var '
+    'wbr center option select textarea'.split())
+_TAG_NAMES = '|'.join(sorted(_BLOCK_TAGS | _INLINE_TAGS, key=len, reverse=True))
+# Element bodies that are never prose. Lazy match up to the matching close tag.
+_DROP_BLOCK_RE = re.compile(
+    r'<(script|style|noscript|template)\b[^<>]*>.*?</\1\s*>', re.IGNORECASE | re.DOTALL)
+_COMMENT_RE = re.compile(r'<!--.*?-->|<!doctype[^<>]*>|<!\[CDATA\[.*?\]\]>',
+                         re.IGNORECASE | re.DOTALL)
+_TAG_RE = re.compile(rf'</?({_TAG_NAMES})\b[^<>]*>', re.IGNORECASE)
+# Evidence that a string really is markup (and not code like `if a<b and c>d`):
+# a closing tag, a void/self-closing tag, a comment, a doctype or a dropped block.
+_LOOKS_LIKE_HTML_RE = re.compile(
+    rf'</({_TAG_NAMES}|script|style|noscript|template)\s*>|<(br|hr|img|meta|link|input|wbr)\b[^<>]*>'
+    rf'|<({_TAG_NAMES})\b[^<>]*/>|<!--|<!doctype', re.IGNORECASE)
 
-    def handle_data(self, d: str) -> None:
-        self.text.append(d)
 
-    def get_data(self) -> str:
-        return ' '.join(self.text)
+def looks_like_html(text: str) -> bool:
+    return bool(_LOOKS_LIKE_HTML_RE.search(text))
 
-def strip_html(html: str) -> str:
-    """Safely strip HTML tags without regex vulnerabilities."""
-    s = MLStripper()
-    try:
-        s.feed(html)
-        return s.get_data()
-    except Exception:
-        return html
+
+def _tag_replacement(m: re.Match[str]) -> str:
+    return '\n' if m.group(1).lower() in _BLOCK_TAGS else ''
+
+
+def strip_html(text: str) -> str:
+    """Remove HTML markup, keeping the visible text.
+
+    Only strings that look like HTML are touched, so code and math such as
+    `x<y and y>z` or `a<b` pass through unchanged. Script/style bodies and
+    comments are dropped, block-level tags become line breaks, inline tags
+    vanish without inserting spaces, and character references are decoded
+    (after tag removal, so escaped markup stays literal text).
+    All patterns use negated character classes, so matching stays linear."""
+    if not text:
+        return text
+    if '<' in text and looks_like_html(text):
+        text = _COMMENT_RE.sub('', text)
+        text = _DROP_BLOCK_RE.sub('', text)
+        text = _TAG_RE.sub(_tag_replacement, text)
+    # Decode entities last, so escaped markup (&lt;b&gt;) survives as text.
+    return html.unescape(text) if '&' in text else text
+
 
 # Order matters: URLs/emails first (so their fragments aren't re-matched), then
 # longer numeric patterns (card) before shorter ones (SSN, phone) that could

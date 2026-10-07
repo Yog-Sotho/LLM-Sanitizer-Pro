@@ -1,4 +1,6 @@
 """Tests for PII redaction, masking, pseudonymization, and text cleaning."""
+import pytest
+
 from sanitizer_pro.pii import clean_text, redact_pii, strip_html, PseudoRegistry
 
 
@@ -89,3 +91,47 @@ class TestCleanText:
 def test_strip_html_nested():
     out = ' '.join(strip_html("<div><p>hello</p> <span>world</span></div>").split())
     assert out == "hello world"
+
+
+class TestStripHtml:
+    """--clean-html must remove markup without corrupting non-HTML text."""
+
+    @pytest.mark.parametrize("text", [
+        "if x<y and y>z: pass",
+        "a<b",
+        "x <y",
+        "price < 5 dollars and > 3",
+        "a<b and c>d",
+        "List<String> list = new ArrayList<>();",
+        "for (i = 0; i<n; i++) { if (a[i]>max) max = a[i]; }",
+    ])
+    def test_non_html_unchanged(self, text):
+        assert strip_html(text) == text
+
+    def test_inline_tags_do_not_split_words(self):
+        assert strip_html("foo<b>bar</b>baz") == "foobarbaz"
+        assert clean_text("un<em>believ</em>able") == "unbelievable"
+
+    def test_block_tags_become_line_breaks(self):
+        assert clean_text("<p>Line one</p><p>Line two<br>three</p>") == \
+            "Line one\n\nLine two\nthree"
+
+    def test_script_style_comments_dropped(self):
+        out = clean_text("<!-- x --><style>p{color:red}</style><script>alert(1)</script>"
+                         "<p>shown</p>")
+        assert out == "shown"
+
+    def test_trailing_text_kept(self):
+        assert clean_text("<b>bold</b> then a < b at the end") == "bold then a < b at the end"
+
+    def test_entities_decoded_after_tags(self):
+        assert strip_html("AT&amp;T &copy;") == "AT&T ©"
+        # escaped markup is content, not markup
+        assert strip_html("<p>use &lt;b&gt; for bold</p>").strip() == "use <b> for bold"
+
+    def test_no_catastrophic_backtracking(self):
+        import time
+        evil = "<div" + " a" * 20000 + "<p>" * 2000 + "</p" * 2000
+        t = time.perf_counter()
+        strip_html(evil + "</div>")
+        assert time.perf_counter() - t < 1.0
