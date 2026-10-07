@@ -1,0 +1,146 @@
+"""Throughput benchmarks for the sanitize CLI.
+
+Each scenario runs ``python -m sanitizer_pro`` on a synthetic corpus
+(benchmarks/corpus.py) in a fresh process, and reports records/s, MB/s and
+peak RSS. ``--check`` compares against the targets below and exits non-zero
+when one is missed — the nightly CI job runs it.
+
+    python -m benchmarks.bench                       # all scenarios, 100k records
+    python -m benchmarks.bench --records 20000 --scenarios regex,jobs
+    python -m benchmarks.bench --check --json results.json
+
+Targets are regression guards set from measurements (100k records, one
+x86 core, Python 3.13): passthrough ~12.6k rec/s, regex PII + secrets ~7.1k,
+with exact dedup ~6.1k; --jobs 4 gave 3.6x. They leave ~30% headroom for
+slower CI runners. Throughput beyond one core comes from --jobs.
+"""
+import argparse
+import json
+import os
+import resource
+import subprocess
+import sys
+import tempfile
+import time
+from typing import Dict, List, NamedTuple, Optional, Sequence
+
+from benchmarks.corpus import write as write_corpus
+
+
+class Scenario(NamedTuple):
+    name: str
+    flags: Sequence[str]
+    target_rps: Optional[float] = None   # minimum records/s
+    jobs: int = 1
+    needs: Sequence[str] = ()            # importable modules required
+
+
+SCENARIOS: List[Scenario] = [
+    Scenario("passthrough", [], target_rps=8_000),
+    Scenario("regex", ["--remove-pii", "--redact-secrets"], target_rps=5_000),
+    Scenario("regex+dedup", ["--remove-pii", "--redact-secrets", "--deduplicate"],
+             target_rps=4_500),
+    Scenario("dedup-sqlite", ["--deduplicate", "--dedup-backend", "sqlite"]),
+    Scenario("fuzzy", ["--fuzzy-dedup"], needs=("datasketch",)),
+    Scenario("rules", ["--quality-rules", "all"]),
+]
+JOBS_FLAGS = ["--remove-pii", "--redact-secrets", "--deduplicate"]
+SCALING_TARGET = 0.6   # throughput at N jobs >= 0.6 * N * single-job throughput
+
+
+def _available(modules: Sequence[str]) -> bool:
+    for m in modules:
+        try:
+            __import__(m)
+        except ImportError:
+            return False
+    return True
+
+
+def run(corpus: str, flags: Sequence[str], jobs: int = 1) -> Dict[str, float]:
+    out_dir = tempfile.mkdtemp(prefix="bench-")
+    cmd = [sys.executable, "-m", "sanitizer_pro", "--input", corpus,
+           "--output", os.path.join(out_dir, "out.jsonl"), "--quiet", "--no-progress",
+           "--jobs", str(jobs), "--stats-file", os.path.join(out_dir, "stats.json"), *flags]
+    before = resource.getrusage(resource.RUSAGE_CHILDREN)
+    t0 = time.perf_counter()
+    proc = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
+    if proc.returncode:
+        raise RuntimeError(f"{' '.join(cmd)} failed:\n{proc.stderr[-2000:]}")
+    elapsed = time.perf_counter() - t0
+    after = resource.getrusage(resource.RUSAGE_CHILDREN)
+    with open(os.path.join(out_dir, "stats.json"), encoding="utf-8") as f:
+        stats = json.load(f)
+    total = stats.get("total", 0)
+    return {"seconds": round(elapsed, 2), "records": total,
+            "rps": round(total / elapsed), "mb_s": round(os.path.getsize(corpus) / elapsed / 1e6, 1),
+            "kept": stats.get("kept", 0),
+            # ru_maxrss is the largest child so far (KiB on Linux)
+            "peak_rss_mb": round(max(before.ru_maxrss, after.ru_maxrss) / 1024)}
+
+
+def main(argv: Optional[Sequence[str]] = None) -> int:
+    ap = argparse.ArgumentParser(prog="python -m benchmarks.bench")
+    ap.add_argument("--records", type=int, default=100_000)
+    ap.add_argument("--corpus", default=None, help="Reuse an existing JSONL corpus.")
+    ap.add_argument("--scenarios", default="all",
+                    help="Comma-separated scenario names, 'jobs', or 'all'.")
+    ap.add_argument("--max-jobs", type=int, default=min(4, os.cpu_count() or 1))
+    ap.add_argument("--check", action="store_true", help="Fail when a target is missed.")
+    ap.add_argument("--json", default=None, help="Write results to this file.")
+    a = ap.parse_args(argv)
+
+    corpus = a.corpus
+    if corpus is None:
+        corpus = os.path.join(tempfile.mkdtemp(prefix="bench-corpus-"), "corpus.jsonl")
+        write_corpus(corpus, a.records)
+    wanted = None if a.scenarios == "all" else set(a.scenarios.split(","))
+
+    results: Dict[str, Dict[str, float]] = {}
+    failures: List[str] = []
+    print(f"{'scenario':<16}{'rec/s':>10}{'MB/s':>8}{'peak MB':>9}{'seconds':>9}  target")
+    for sc in SCENARIOS:
+        if wanted is not None and sc.name not in wanted:
+            continue
+        if not _available(sc.needs):
+            print(f"{sc.name:<16}  skipped (needs {', '.join(sc.needs)})")
+            continue
+        r = run(corpus, sc.flags)
+        results[sc.name] = r
+        verdict = ""
+        if sc.target_rps:
+            ok = r["rps"] >= sc.target_rps
+            verdict = f">= {sc.target_rps:,.0f} {'ok' if ok else 'MISSED'}"
+            if not ok:
+                failures.append(f"{sc.name}: {r['rps']:,.0f} rec/s < {sc.target_rps:,.0f}")
+        print(f"{sc.name:<16}{r['rps']:>10,.0f}{r['mb_s']:>8}{r['peak_rss_mb']:>9}"
+              f"{r['seconds']:>9}  {verdict}")
+
+    if wanted is None or "jobs" in wanted:
+        base = results.get("regex+dedup") or run(corpus, JOBS_FLAGS)
+        jobs = 2
+        while jobs <= a.max_jobs:
+            r = run(corpus, JOBS_FLAGS, jobs=jobs)
+            results[f"jobs={jobs}"] = r
+            speedup = r["rps"] / base["rps"]
+            ok = speedup >= SCALING_TARGET * jobs
+            if not ok:
+                failures.append(f"jobs={jobs}: speedup {speedup:.2f}x < "
+                                f"{SCALING_TARGET * jobs:.2f}x")
+            print(f"{'jobs=' + str(jobs):<16}{r['rps']:>10,.0f}{r['mb_s']:>8}"
+                  f"{r['peak_rss_mb']:>9}{r['seconds']:>9}  speedup {speedup:.2f}x "
+                  f"(>= {SCALING_TARGET * jobs:.1f}x {'ok' if ok else 'MISSED'})")
+            jobs *= 2
+
+    if a.json:
+        with open(a.json, "w", encoding="utf-8") as f:
+            json.dump({"records": a.records, "cpus": os.cpu_count(), "results": results,
+                       "failures": failures}, f, indent=2)
+    if a.check and failures:
+        print("\nTargets missed:\n  " + "\n  ".join(failures), file=sys.stderr)
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

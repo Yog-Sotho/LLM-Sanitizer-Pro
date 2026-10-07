@@ -18,20 +18,6 @@ except ImportError:
     _tqdm = None
     TQDM_AVAILABLE = False
 
-try:
-    import openpyxl as _openpyxl
-    OPENPYXL_AVAILABLE = True
-except ImportError:
-    _openpyxl = None
-    OPENPYXL_AVAILABLE = False
-
-try:
-    import pandas as pd
-    PANDAS_AVAILABLE = True
-except ImportError:
-    pd = None
-    PANDAS_AVAILABLE = False
-
 from sanitizer_pro import __version__
 from sanitizer_pro.api import Sanitizer
 from sanitizer_pro.config import apply_config_to_args, collect_explicit_args, load_config_file
@@ -86,16 +72,20 @@ def resolve_excel_sheet(
     
     if input_path and input_path not in {_STDIN}:
         try:
-            if OPENPYXL_AVAILABLE:
-                wb = _openpyxl.load_workbook(input_path, read_only=True, data_only=True)
+            # Imported here: pandas alone adds ~0.2 s to every CLI start.
+            try:
+                import openpyxl
+                wb = openpyxl.load_workbook(input_path, read_only=True, data_only=True)
                 available = wb.sheetnames
                 wb.close()
-            elif PANDAS_AVAILABLE:
+            except ImportError:
+                try:
+                    import pandas as pd
+                except ImportError:
+                    return resolved
                 xl = pd.ExcelFile(input_path)
                 available = xl.sheet_names
                 xl.close()
-            else:
-                return resolved
 
             if isinstance(resolved, str) and resolved not in available:
                 raise ConfigurationError(f"Sheet '{resolved}' not found. Available: {available}")

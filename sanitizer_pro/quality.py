@@ -45,12 +45,24 @@ def extract_text_for_quality(
 # Chinese sentence is a single \w+ run and fails any word-count gate.
 _UNSPACED = (r'\u0E00-\u0EFF\u1000-\u109F\u1780-\u17FF\u3040-\u30FF\u3400-\u4DBF'
              r'\u4E00-\u9FFF\uF900-\uFAFF')
-_WORD_RE = re.compile(rf'[{_UNSPACED}]|(?:(?![{_UNSPACED}])\w)+')
+# [^\W…] is \w minus the unspaced scripts (one class: no per-char lookahead).
+_WORD_RE = re.compile(rf'[{_UNSPACED}]|[^\W{_UNSPACED}]+')
+
+
+_last_words: Tuple[Optional[str], List[str]] = (None, [])
 
 
 def words_of(text: str) -> List[str]:
-    """Script-aware word tokens used by the quality gates."""
-    return _WORD_RE.findall(text)
+    """Script-aware word tokens used by the quality gates (do not mutate the
+    result). The quality gate and the kept-record stats tokenize the same
+    string object back to back, so the last result is reused (matched by
+    identity: no string comparison)."""
+    global _last_words
+    if _last_words[0] is text:
+        return _last_words[1]
+    words: List[str] = _WORD_RE.findall(text)
+    _last_words = (text, words)
+    return words
 
 
 def _check_quality_reason(text: str, args: 'SanitizerConfig') -> Optional[str]:

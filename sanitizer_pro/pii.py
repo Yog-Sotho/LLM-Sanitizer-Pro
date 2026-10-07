@@ -3,7 +3,7 @@ import html
 import ipaddress
 import re
 import unicodedata
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, FrozenSet, List, NamedTuple, Optional, Set, Tuple
 
 _BLOCK_TAGS = frozenset(
     'address article aside blockquote body br caption dd details dialog div dl dt '
@@ -187,6 +187,182 @@ _TRIMMERS: Dict[re.Pattern[str], Callable[[str], Tuple[str, str]]] = {
     _URL_RE: _trim_url, _WWW_RE: _trim_url,
 }
 
+
+class Gate(NamedTuple):
+    """A cheap necessary condition for a pattern to match: one of `literals`
+    (or, case-insensitively, `ci_literals`) occurs in the text, and/or the
+    text has a digit. Patterns whose gate fails are skipped without running
+    them — most text holds no PII, and all gate literals are found in one
+    regex pass, far cheaper than one scan per pattern with lookarounds.
+    Case-insensitive literals are matched by an IGNORECASE regex, which folds
+    case exactly like the gated patterns do (Kelvin sign, dotless i, long s)."""
+    literals: Tuple[str, ...] = ()
+    digit: bool = False
+    ci_literals: Tuple[str, ...] = ()
+
+    @classmethod
+    def ignorecase(cls, *literals: str, digit: bool = False) -> 'Gate':
+        return cls((), digit, literals)
+
+
+_DIGIT_RE = re.compile(r'\d')
+
+# Keyed by built-in pattern, like the validators; every gate must be implied
+# by its pattern (a match is impossible when the gate fails).
+_GATES: Dict[re.Pattern[str], Gate] = {
+    _EMAIL_RE: Gate(('@',)),
+    _URL_RE: Gate(('://',)),
+    _WWW_RE: Gate.ignorecase('www.'),
+    _IBAN_RE: Gate(digit=True),
+    _CARD_RE: Gate(digit=True),
+    _SSN_RE: Gate(digit=True),
+    _INTL_PHONE_RE: Gate(('+',), digit=True),
+    _PHONE_RE: Gate(digit=True),
+    _IPV4_RE: Gate(digit=True),
+    _IPV6_RE: Gate((':',)),
+}
+
+
+class _Step(NamedTuple):
+    pattern: re.Pattern[str]
+    token: str
+    kind: str
+    validate: Optional[Validator]
+    trim: Optional[Callable[[str], Tuple[str, str]]]
+    gate: Optional[Gate]
+    literal_ids: FrozenSet[int]      # trigger ids, any of which opens the gate
+
+
+class _TriggerScan:
+    """Finds which gate literals occur in a text. Substring tests (`in`)
+    are exact and fast. Case-insensitive literals are tested against
+    text.lower() when the text is ASCII; otherwise an IGNORECASE regex
+    decides, so Unicode case folding matches the gated patterns exactly
+    (Kelvin sign, dotless i, long s). Its zero-width lookahead reports every
+    position where a literal starts (longest first), and literals that are
+    prefixes of the one found there are implied (`sk-` inside `sk-ant-`)."""
+
+    def __init__(self, literals: List[str], ignorecase: bool = False) -> None:
+        order = sorted(set(literals), key=len, reverse=True)
+        self.ids = {lit: i for i, lit in enumerate(order)}
+        self.ignorecase = ignorecase
+        self.items = [(lit.lower() if ignorecase else lit, i) for i, lit in enumerate(order)]
+        self.implied: Dict[int, FrozenSet[int]] = {
+            g: frozenset(self.ids[o] for o in order if lit.lower().startswith(o.lower()))
+            for g, lit in enumerate(order, start=1)}
+        self.regex = (re.compile('(?=' + '|'.join(f'({re.escape(x)})' for x in order) + ')',
+                                 re.IGNORECASE) if order and ignorecase else None)
+
+    def scan(self, text: str) -> Set[int]:
+        if not self.ignorecase:
+            return {i for lit, i in self.items if lit in text}
+        if text.isascii():
+            low = text.lower()
+            return {i for lit, i in self.items if lit in low}
+        found: Set[int] = set()
+        if self.regex is not None:
+            for m in self.regex.finditer(text):
+                found |= self.implied[m.lastindex or 0]
+        return found
+
+
+class PatternPlan:
+    """A pattern list prepared for repeated application: validators,
+    trimmers and gates looked up once, gate literals compiled into two
+    trigger scans (case-sensitive and case-insensitive)."""
+
+    def __init__(self, patterns: List[Tuple[re.Pattern[str], str, str]]) -> None:
+        gates = [_GATES.get(p) for p, _, _ in patterns]
+        self.cs = _TriggerScan([lit for g in gates if g for lit in g.literals])
+        self.ci = _TriggerScan([lit for g in gates if g for lit in g.ci_literals], True)
+        n_cs = len(self.cs.ids)
+        self.steps = [
+            _Step(p, token, kind, _VALIDATORS.get(p), _TRIMMERS.get(p), g,
+                  frozenset([self.cs.ids[x] for x in g.literals]
+                            + [n_cs + self.ci.ids[x] for x in g.ci_literals]) if g else frozenset())
+            for (p, token, kind), g in zip(patterns, gates)]
+        self._n_cs = n_cs
+        # Which steps each trigger can open; steps gated only on a digit; ungated steps.
+        self._by_trigger: Dict[int, List[int]] = {}
+        self._digit_only: List[int] = []
+        self._always: List[int] = []
+        for i, step in enumerate(self.steps):
+            if step.gate is None:
+                self._always.append(i)
+            elif step.literal_ids:
+                for t in step.literal_ids:
+                    self._by_trigger.setdefault(t, []).append(i)
+            elif step.gate.digit:
+                self._digit_only.append(i)
+            else:
+                self._always.append(i)
+
+    def candidates(self, text: str, after: int = -1) -> List[int]:
+        """Indices (> after, ascending) of the steps whose gate is open."""
+        found = set(self._always)
+        if self._by_trigger:
+            for t in self.triggers(text):
+                found.update(self._by_trigger.get(t, ()))
+        digit: Optional[bool] = None
+        if self._digit_only:
+            digit = _DIGIT_RE.search(text) is not None
+            if digit:
+                found.update(self._digit_only)
+        out = []
+        for i in sorted(found):
+            if i <= after:
+                continue
+            gate = self.steps[i].gate
+            if gate is not None and gate.digit and self.steps[i].literal_ids:
+                if digit is None:
+                    digit = _DIGIT_RE.search(text) is not None
+                if not digit:
+                    continue
+            out.append(i)
+        return out
+
+    def triggers(self, text: str) -> Set[int]:
+        found = self.cs.scan(text)
+        if self.ci.items:
+            found |= {self._n_cs + i for i in self.ci.scan(text)}
+        return found
+
+
+_PLANS: Dict[int, Tuple[List[Tuple[re.Pattern[str], str, str]], PatternPlan]] = {}
+
+
+def pattern_plan(patterns: List[Tuple[re.Pattern[str], str, str]]) -> PatternPlan:
+    """The cached plan for a pattern list (kept by identity; the cache holds
+    the list, so its id cannot be reused while cached)."""
+    hit = _PLANS.get(id(patterns))
+    if hit is not None and hit[0] is patterns:
+        return hit[1]
+    if len(_PLANS) > 64:  # lists built per call by API users: bound the cache
+        _PLANS.clear()
+    plan = PatternPlan(patterns)
+    _PLANS[id(patterns)] = (patterns, plan)
+    return plan
+
+
+_COMBINED: Dict[Tuple[int, int], List[Tuple[re.Pattern[str], str, str]]] = {}
+
+
+def combined_patterns(base: List[Tuple[re.Pattern[str], str, str]],
+                      extra: Optional[List[Tuple[re.Pattern[str], str, str]]]
+                      ) -> List[Tuple[re.Pattern[str], str, str]]:
+    """base + extra, as the same list object on every call with the same two
+    lists, so pattern_plan() finds it in its cache."""
+    if not extra:
+        return base
+    key = (id(base), id(extra))
+    hit = _COMBINED.get(key)
+    if hit is None or hit[len(base):] != extra:
+        if len(_COMBINED) > 64:
+            _COMBINED.clear()
+        hit = _COMBINED[key] = base + extra
+    return hit
+
+
 def _mask_email(m: re.Match[str]) -> str:
     full = m.group(0)
     try:
@@ -296,9 +472,15 @@ def apply_patterns(
     precedence, then masking (for kinds with a mask function), then plain
     token replacement. `counters` tallies substitutions per kind."""
     mask_fns = mask_fns if mask_fns is not None else _MASK_FN
-    for pattern, token, kind in patterns:
-        validate = _VALIDATORS.get(pattern)
-        trim = _TRIMMERS.get(pattern)
+    plan = pattern_plan(patterns)
+    todo = plan.candidates(text)
+    pos = 0
+    while pos < len(todo):
+        index = todo[pos]
+        pos += 1
+        step = plan.steps[index]
+        pattern, token, kind = step.pattern, step.token, step.kind
+        validate, trim = step.validate, step.trim
         current = text
         hits = 0
 
@@ -329,8 +511,11 @@ def apply_patterns(
             return prefix + token + suffix
 
         text = pattern.sub(_sub, current)
-        if hits and counters is not None:
-            counters[kind] = counters.get(kind, 0) + hits
+        if hits:
+            # Replacements (pseudonyms) may add triggers or digits for later patterns.
+            todo, pos = plan.candidates(text, after=index), 0
+            if counters is not None:
+                counters[kind] = counters.get(kind, 0) + hits
     return text
 
 
@@ -343,9 +528,14 @@ def find_spans(
     them, mirroring sequential redaction."""
     work = text
     found: List[Tuple[int, int, str]] = []
-    for pattern, _token, kind in patterns:
-        validate = _VALIDATORS.get(pattern)
-        trim = _TRIMMERS.get(pattern)
+    plan = pattern_plan(patterns)
+    todo = plan.candidates(work)
+    pos = 0
+    while pos < len(todo):
+        index = todo[pos]
+        pos += 1
+        step = plan.steps[index]
+        pattern, kind, validate, trim = step.pattern, step.kind, step.validate, step.trim
         claimed = []
         for m in pattern.finditer(work):
             if validate is not None and not validate(work, m):
@@ -360,6 +550,8 @@ def find_spans(
                 claimed.append((start, end, kind))
         for start, end, _ in claimed:
             work = work[:start] + '\x00' * (end - start) + work[end:]
+        if claimed:
+            todo, pos = plan.candidates(work, after=index), 0
         found.extend(claimed)
     return sorted(found)
 
@@ -368,7 +560,7 @@ def find_pii_spans(
     text: str, extra_patterns: Optional[List[Tuple[re.Pattern[str], str, str]]] = None,
 ) -> List[Tuple[int, int, str]]:
     """Spans the regex PII redactor would redact (see find_spans)."""
-    return find_spans(text, _PII_PATTERNS + (extra_patterns or []))
+    return find_spans(text, combined_patterns(_PII_PATTERNS, extra_patterns))
 
 
 def redact_pii(
@@ -381,8 +573,14 @@ def redact_pii(
     """Redact, mask, or pseudonymize PII. When `counters` is given, tallies
     the number of substitutions per PII kind into it."""
     return apply_patterns(
-        text, _PII_PATTERNS + (extra_patterns or []),
+        text, combined_patterns(_PII_PATTERNS, extra_patterns),
         mask=mask, pseudo_registry=pseudo_registry, counters=counters)
+
+_CONTROL_RE = re.compile(r'[\x00-\x08\x0B-\x1F\x7F-\x9F]')  # keeps \t (0x09) and \n (0x0A)
+_HSPACE_RE = re.compile(r'[ \t]{2,}|\t')  # single spaces are already final
+_NEWLINE_SPACE_RE = re.compile(r' ?\n ?')
+_BLANK_LINES_RE = re.compile(r'\n{3,}')
+
 
 def clean_text(text: str, remove_html: bool = True) -> str:
     """Normalize unicode, strip HTML, and tidy whitespace.
@@ -396,8 +594,9 @@ def clean_text(text: str, remove_html: bool = True) -> str:
     text = unicodedata.normalize('NFKC', text)
     if remove_html:
         text = strip_html(text)
-    text = re.sub(r'[\x00-\x08\x0B-\x1F\x7F-\x9F]', ' ', text)  # keep \t (0x09) and \n (0x0A)
-    text = re.sub(r'[ \t]+', ' ', text)
-    text = re.sub(r' ?\n ?', '\n', text)
-    text = re.sub(r'\n{3,}', '\n\n', text)
+    text = _CONTROL_RE.sub(' ', text)
+    text = _HSPACE_RE.sub(' ', text)
+    if '\n' in text:
+        text = _NEWLINE_SPACE_RE.sub('\n', text)
+        text = _BLANK_LINES_RE.sub('\n\n', text)
     return text.strip()
