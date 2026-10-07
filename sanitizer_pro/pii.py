@@ -415,11 +415,14 @@ class PseudoRegistry:
 
     Without a key, pseudonyms are numbered in order of first appearance
     (Person_0001, Person_0002, ...): stable within one process. With a
-    `key`, the number is derived from HMAC-SHA256(key, kind, value): every
+    `key`, the id is derived from HMAC-SHA256(key, kind, value): every
     worker process and every run with the same key gives a value the same
-    pseudonym, without sharing state. Keyed numbers are 48-bit (IPv4: 24
-    bits, to stay inside 10.0.0.0/8), so with very many distinct values
-    two can share a pseudonym; that is logged when it happens here."""
+    pseudonym, without sharing state. Keyed ids are 12 lowercase hex digits
+    (48 bits; Person_3fa94c07e21b): hex, not decimal, so that no pseudonym
+    holds the long digit runs that later patterns (cards) would redact
+    again. IPv4 pseudonyms stay addresses in 10.0.0.0/8 (24 bits). With
+    very many distinct values two can share a pseudonym; that is logged
+    when it happens here."""
     _TEMPLATES: Dict[str, str] = {
         'email': 'email_{n:04d}@redacted.local', 'phone': 'phone_{n:04d}',
         'card': 'card_{n:04d}', 'ssn': '000-00-{n:04d}', 'iban': 'IBAN_{n:04d}',
@@ -450,10 +453,12 @@ class PseudoRegistry:
     def get_or_create(self, value: str, kind: str) -> str:
         if value in self._map:
             return self._map[value]
+        template = self._templates.get(kind, 'pii_{n:04d}')
         if self._key is not None:
             digest = hmac.new(self._key, f"{kind}\x00{value}".encode('utf-8'),
                               hashlib.sha256).digest()
-            n = int.from_bytes(digest[:3] if kind == 'ip' else digest[:6], 'big')
+            n = int.from_bytes(digest[:3], 'big')
+            template = template.replace('{n:04d}', digest[:6].hex())
         else:
             n = self._counts.get(kind, 0) + 1
             self._counts[kind] = n
@@ -461,12 +466,12 @@ class PseudoRegistry:
             # A valid address in 10/8 (the old '0.0.0.{n}' broke past n=255).
             pseudo = f"10.{(n >> 16) & 255}.{(n >> 8) & 255}.{n & 255}"
         else:
-            pseudo = self._templates.get(kind, 'pii_{n:04d}').format(n=n)
+            pseudo = template.format(n=n)
         if self._key is not None:
             other = self._issued.setdefault(pseudo, value)
             if other != value:
                 logging.warning(f"Pseudonym collision: two distinct {kind} values map to "
-                                f"{pseudo} (keyed pseudonyms are 48-bit; IPv4 24-bit).")
+                                f"{pseudo} (keyed ids are 48-bit; IPv4 24-bit).")
         self._map[value] = pseudo
         if self._new is not None:
             self._new.append((value, pseudo))

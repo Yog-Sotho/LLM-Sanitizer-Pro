@@ -1,0 +1,31 @@
+site_name: LLM Sanitizer Pro
+site_description: Dataset sanitization and curation for LLM training
+repo_url: https://github.com/Yog-Sotho/LLM-Sanitizer-Pro
+edit_uri: edit/main/docs/
+theme:
+  name: material
+  features:
+    - navigation.sections
+    - content.code.copy
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      toggle: {icon: material/brightness-7, name: Dark mode}
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      toggle: {icon: material/brightness-4, name: Light mode}
+nav:
+  - Overview: index.md
+  - CLI reference: cli.md
+  - Provenance: provenance.md
+  - Performance: performance.md
+  - Releases: releases.md
+  - Changelog: changelog.md
+  - Audit (2026-10): AUDIT_2026-10.md
+markdown_extensions:
+  - admonition
+  - tables
+  - toc: {permalink: true}
+  - pymdownx.highlight
+  - pymdownx.superfences
+  - pymdownx.snippets: {base_path: ["."], check_paths: true}
