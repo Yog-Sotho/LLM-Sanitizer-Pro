@@ -1,10 +1,13 @@
 # Changelog
 
-## Unreleased (planned 4.0.0)
+## 4.0.0 (2026-10-07)
 
-Phases 1–4 of the audit plan (`docs/AUDIT_2026-10.md`): data-integrity, privacy and
-detection-quality fixes, one shared pipeline engine, current detection backends, then
-scale.
+The five phases of the audit plan (`docs/AUDIT_2026-10.md`):
+1. data-integrity, privacy and detection-quality fixes;
+2. one shared pipeline engine;
+3. current detection backends;
+4. scale;
+5. provenance and release quality.
 
 ### Behavior changes: read before upgrading
 
@@ -104,9 +107,12 @@ scale.
   - With `--jobs N` on JSONL, workers read and parse byte-range chunks themselves.
   - `--jobs 4` runs at 20.6k rec/s, up from 6.3k.
   - Output, stats, report samples and pseudonym maps are identical to `--jobs 1`.
-- **Keyed pseudonyms** (`--pseudo-key` / `SANITIZE_PSEUDO_KEY`): HMAC-derived, so they
-  are the same across worker processes and runs. `--pii-pseudonymize` now works with
-  `--jobs > 1`.
+- **Keyed pseudonyms** (`--pseudo-key` / `SANITIZE_PSEUDO_KEY`):
+  - The id is HMAC-derived, so it is the same across worker processes and runs:
+    `Person_3fa94c07e21b`.
+  - Ids are 12 hex digits, not decimal. A long decimal id would contain a digit run
+    that later patterns (cards) redact again.
+  - `--pii-pseudonymize` now works with `--jobs > 1`.
 - **Fuzzy dedup:**
   - `--fuzzy-backend {auto,rensa,datasketch}`, plus a `[fuzzy]` extra for rensa.
   - 6.1k rec/s, up from 455.
@@ -120,6 +126,32 @@ scale.
     with regression targets
   - `fuzzy_recall.py`: fuzzy dedup against exact Jaccard
   - `semantic_recall.py`: the semantic index against exact search
+- **Run manifest** (`--manifest run.json`):
+  - tool, dependency and model versions;
+  - the full configuration and its SHA-256;
+  - every input and output file (splits and shards included) with size and SHA-256;
+  - per-stage counts and timing.
+  - The pseudonymization key is recorded only as set or unset.
+- **Hugging Face dataset card** (`--dataset-card README.md`), rendered from the
+  manifest:
+  - front matter: size category, languages and tags;
+  - the processing steps with their settings;
+  - the record funnel, redaction counts (never values), decontamination results;
+  - models, file digests and a reproduction command.
+- **`sanitize diff A B`** compares two manifests or stats files: counts, breakdowns,
+  configuration, models, dependencies and files. `--fail-on-change` exits 1 on any
+  difference, which works as a CI gate.
+- **Signed releases.**
+  - The release workflow checks that the tag matches the built version.
+  - It writes a CycloneDX SBOM.
+  - Distributions are signed with Sigstore and get SLSA build provenance (GitHub
+    attestations).
+  - It publishes to PyPI with Trusted Publishing (PEP 740 attestations) and creates a
+    GitHub release with the changelog notes, signatures and SBOM.
+- **Documentation site** (MkDocs Material, GitHub Pages; `[docs]` extra):
+  - a CLI reference generated from the argument parser (a test keeps it current);
+  - pages on provenance, performance and accuracy, and verifying releases.
+  - Every CLI option now has help text.
 
 ### Changed
 

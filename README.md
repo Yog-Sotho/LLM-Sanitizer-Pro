@@ -2,6 +2,8 @@
 
 Production-grade, modular dataset sanitization, PII redaction, and curation pipeline for LLM training and fine-tuning.
 
+**Documentation:** <https://yog-sotho.github.io/LLM-Sanitizer-Pro/> (CLI reference, provenance, performance, verifying releases) · [Changelog](https://github.com/Yog-Sotho/LLM-Sanitizer-Pro/blob/main/CHANGELOG.md)
+
 ## 🚀 Features
 
 - **Multi-Format Streaming**: JSONL, JSON (ijson streaming), CSV/TSV, TXT, Parquet, Excel, and gzip variants — from files or stdin/stdout.
@@ -50,6 +52,7 @@ Production-grade, modular dataset sanitization, PII redaction, and curation pipe
   - **Measured speed:** 100k records with PII + secrets redaction and dedup ran at 20.6k rec/s with 4 jobs, against 6.3k rec/s for one process.
   - **Pseudonyms:** with `--pii-pseudonymize`, set `SANITIZE_PSEUDO_KEY` (or `--pseudo-key`) for keyed pseudonyms. The same value gets the same pseudonym in every worker and every run that uses the key.
 - **Many Input Files**: `--input` takes a directory (searched recursively) or a glob (`'data/**/*.jsonl'`). Files are read in sorted order, may mix formats, and work with `--resume`.
+- **Provenance**: `--manifest run.json` records exactly how a dataset was produced: versions, models, full config and its hash, SHA-256 of every input and output, and per-stage counts. `--dataset-card README.md` writes a Hugging Face dataset card from it, and `sanitize diff a.json b.json` compares two runs (`--fail-on-change` for CI).
 - **Audit Report** (`--report audit.html`): a self-contained HTML artifact per run — removal funnel, PII redaction counts by type, quality-score distribution, chat-failure breakdown, and before/after redaction samples. Light/dark aware, no external assets; archive it next to the dataset or attach it to a compliance ticket. Also available from the Python API via `s.write_report(path)`.
 
 ## 📦 Installation
@@ -214,6 +217,8 @@ pip install -e .[dev]
 pytest            # run the test suite
 ruff check sanitizer_pro tests benchmarks scripts
 mypy              # strict
+pip install -e .[docs] && mkdocs serve           # docs site at localhost:8000
+python scripts/gen_cli_reference.py              # after changing CLI options
 
 # Throughput (rec/s, MB/s, peak RSS per scenario, --jobs scaling); nightly in CI
 python -m benchmarks.bench --records 100000
