@@ -51,6 +51,10 @@ detection-quality fixes, then one shared pipeline engine.
   (`feed()` / `feed_transformed()` / `finish()`). Worker processes build a
   `RecordTransformer` from the config. `core.sanitize_record` takes a
   `SanitizerConfig` and returns a `Transformed` named tuple.
+- **The version has one source**, `sanitizer_pro.__version__`. `pyproject.toml`
+  reads it, and so do the run summary, the stats file and the report. New
+  `--version` flag.
+- **The package passes `mypy --strict`**, and a CI job enforces it (Python 3.12).
 
 ### Fixed
 
