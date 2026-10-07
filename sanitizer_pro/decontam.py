@@ -118,6 +118,13 @@ KNOWN_BENCHMARKS: Dict[str, BenchmarkSpec] = {
 }
 
 
+def full_text_for_decontam(record: Any) -> str:
+    """Every string in the record, untruncated: contamination can sit in any
+    field (e.g. the answer) and anywhere in a long document, not just in the
+    8 KB quality-scoring slice."""
+    return ' '.join(_iter_strings(record))
+
+
 def resolve_benchmark_names(spec: str) -> List[str]:
     names = [s.strip().lower() for s in spec.split(',') if s.strip()]
     if 'all' in names:

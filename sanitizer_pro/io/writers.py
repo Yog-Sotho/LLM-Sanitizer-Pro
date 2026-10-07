@@ -1,11 +1,13 @@
 """Streaming writers with crash safety, sharding, and dataset splitting."""
 import csv
 import json
+import logging
 import os
 import random
 import sys
+import tempfile
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Iterator, List, Optional
 
 from sanitizer_pro.utils import ConfigurationError, smart_open, _STDOUT
 
@@ -28,14 +30,44 @@ _BUFFERED_FORMATS = {'.xlsx', '.xls', '.parquet'}
 SUPPORTED_OUTPUT_FORMATS = _STREAM_FORMATS | _BUFFERED_FORMATS
 
 
+def _csv_value(v: Any) -> Any:
+    """CSV cell for a record value: nested structures as JSON, not Python repr."""
+    if isinstance(v, (dict, list, tuple)):
+        return json.dumps(v, ensure_ascii=False, default=str)
+    return v
+
+
+def _scalar_or_json(v: Any) -> Any:
+    return v if v is None or isinstance(v, str) else json.dumps(v, ensure_ascii=False, default=str)
+
+
+def _tmp_sibling(path: str, tag: str) -> str:
+    """A fresh temp file next to `path` that keeps a trailing .gz, so
+    smart_open applies the same compression as the final file."""
+    directory = os.path.dirname(os.path.abspath(path))
+    gz = '.gz' if path.lower().endswith('.gz') else ''
+    fd, tmp = tempfile.mkstemp(dir=directory, prefix=f".{os.path.basename(path)}.",
+                               suffix=f".{tag}{gz}")
+    os.close(fd)
+    return tmp
+
+
+_PARQUET_BATCH = 50_000
+
+
 class StreamingWriter:
-    """Write records one at a time; buffered formats (Excel/Parquet) collect and
-    materialize on close. JSON output is atomic (tmp file + os.replace)."""
+    """Write records one at a time. JSON/CSV/Parquet/Excel outputs are atomic
+    (temp file + os.replace) and keep every column that appears in any
+    record: CSV and Parquet stage rows on disk and render them at close with
+    the union of all fields (Parquet with a unified, type-promoted schema,
+    written in batches). JSONL/TXT, and CSV in append/durable (resume) mode,
+    stream straight to the destination."""
 
     APPENDABLE_FORMATS = {'.jsonl', '.txt', '.csv'}
 
     def __init__(self, output_path: str, fmt: str, encoding: str = 'utf-8',
-                 txt_fallback_field: Optional[str] = None, append: bool = False) -> None:
+                 txt_fallback_field: Optional[str] = None, append: bool = False,
+                 durable: bool = False) -> None:
         if fmt not in SUPPORTED_OUTPUT_FORMATS:
             raise ConfigurationError(
                 f"Unsupported output format '{fmt}'. Supported: {sorted(SUPPORTED_OUTPUT_FORMATS)}")
@@ -51,20 +83,30 @@ class StreamingWriter:
             raise ConfigurationError(f"{fmt} output cannot be written to stdout.")
         self.output_path, self.fmt, self.encoding = output_path, fmt, encoding
         self.txt_fallback_field = txt_fallback_field
+        # CSV must stream in place when appending (resume) or when the output
+        # offset has to be durable; otherwise it is staged so late columns fit.
+        self._staged = (fmt == '.parquet' or
+                        (fmt == '.csv' and output_path != _STDOUT and not append and not durable))
         self._file: Any = None
         self._tmp_path: Optional[str] = None
+        self._stage_path: Optional[str] = None
+        self._fields: Dict[str, None] = {}  # ordered union of keys (staged formats)
         self._csv_writer: Optional[csv.DictWriter] = None
         self._csv_fields: Optional[List[str]] = None
+        self._dropped_columns: Dict[str, int] = {}
         self._buffer: List[Dict[str, Any]] = []
         self._json_first = True
         self._count = 0
 
     def __enter__(self) -> 'StreamingWriter':
-        if self.fmt == '.json':
+        if self._staged:
+            self._stage_path = _tmp_sibling(self.output_path, 'staging.jsonl')
+            self._file = open(self._stage_path, 'w', encoding='utf-8')
+        elif self.fmt == '.json':
             if self.output_path == _STDOUT:
                 self._file = sys.stdout
             else:
-                self._tmp_path = self.output_path + '.tmp'
+                self._tmp_path = _tmp_sibling(self.output_path, 'tmp')
                 self._file = smart_open(self._tmp_path, 'w', encoding=self.encoding)
             self._file.write('[\n')
         elif self.fmt in {'.jsonl', '.txt', '.csv'}:
@@ -87,7 +129,12 @@ class StreamingWriter:
 
     def write(self, record: Dict[str, Any]) -> None:
         self._count += 1
-        if self.fmt == '.jsonl':
+        if self._staged:
+            for k in record:
+                if k not in self._fields:
+                    self._fields[str(k)] = None
+            self._file.write(json.dumps(record, ensure_ascii=False, default=str) + '\n')
+        elif self.fmt == '.jsonl':
             self._file.write(json.dumps(record, ensure_ascii=False, default=str) + '\n')
         elif self.fmt == '.txt':
             text = record.get('text')
@@ -107,13 +154,133 @@ class StreamingWriter:
                 self._csv_writer = csv.DictWriter(
                     self._file, fieldnames=self._csv_fields, extrasaction='ignore')
                 self._csv_writer.writeheader()
-            self._csv_writer.writerow(record)
+            self._note_dropped_columns(record)
+            self._csv_writer.writerow({k: _csv_value(v) for k, v in record.items()})
         else:
             self._buffer.append(record)
+
+    def _note_dropped_columns(self, record: Dict[str, Any]) -> None:
+        """Streaming CSV cannot grow its header: count values that do not fit."""
+        known = self._csv_fields or []
+        for k in record:
+            if k not in known:
+                if k not in self._dropped_columns:
+                    logging.warning(
+                        f"CSV output {self.output_path}: field '{k}' is not in the header "
+                        f"({len(known)} columns, fixed by the first/existing row); its "
+                        "values are dropped. Use .jsonl to keep every field.")
+                self._dropped_columns[k] = self._dropped_columns.get(k, 0) + 1
+
+    @property
+    def dropped_columns(self) -> Dict[str, int]:
+        """Values dropped per field by streaming CSV output (normally empty)."""
+        return dict(self._dropped_columns)
 
     def flush(self) -> None:
         if self._file is not None and not self._file.closed:
             self._file.flush()
+
+    def durable_size(self) -> int:
+        """Make everything written so far durable and return the output size
+        in bytes — a safe truncation point for resuming after a crash.
+
+        gzip output is closed and reopened in append mode so the offset falls
+        on a complete gzip member boundary (a flushed-but-open member is not
+        decodable after truncation)."""
+        if (self.output_path == _STDOUT or self.fmt not in self.APPENDABLE_FORMATS
+                or self._staged):
+            raise ConfigurationError(
+                f"{self.fmt} output to {self.output_path} has no durable size "
+                "(open it with durable=True).")
+        if self.output_path.lower().endswith('.gz'):
+            self._file.close()
+            self._file = smart_open(self.output_path, 'a', encoding=self.encoding)
+            if self._csv_writer is not None:
+                self._csv_writer = csv.DictWriter(
+                    self._file, fieldnames=self._csv_fields, extrasaction='ignore')
+            fd = os.open(self.output_path, os.O_RDONLY)
+            try:
+                os.fsync(fd)
+            finally:
+                os.close(fd)
+        else:
+            self._file.flush()
+            os.fsync(self._file.fileno())
+        return os.path.getsize(self.output_path)
+
+    # -- staged rendering -----------------------------------------------------
+
+    def _staged_rows(self, fields: List[str], stringify: Optional[set] = None
+                     ) -> Iterator[Dict[str, Any]]:
+        stringify = stringify or set()
+        with open(self._stage_path, 'r', encoding='utf-8') as src:
+            for line in src:
+                rec = json.loads(line)
+                yield {f: (_scalar_or_json(rec.get(f)) if f in stringify else rec.get(f))
+                       for f in fields}
+
+    def _staged_batches(self, fields: List[str], stringify: Optional[set] = None
+                        ) -> Iterator[List[Dict[str, Any]]]:
+        batch: List[Dict[str, Any]] = []
+        for row in self._staged_rows(fields, stringify):
+            batch.append(row)
+            if len(batch) >= _PARQUET_BATCH:
+                yield batch
+                batch = []
+        if batch:
+            yield batch
+
+    def _render_csv(self, dest: str) -> None:
+        fields = list(self._fields)
+        with smart_open(dest, 'w', encoding=self.encoding) as out:
+            if not fields:
+                return
+            writer = csv.DictWriter(out, fieldnames=fields, extrasaction='ignore')
+            writer.writeheader()
+            for row in self._staged_rows(fields):
+                writer.writerow({k: _csv_value(v) for k, v in row.items()})
+
+    def _parquet_schema(self, fields: List[str], stringify: set) -> Any:
+        schemas = [pa.Table.from_pylist(b).schema for b in self._staged_batches(fields, stringify)]
+        if not schemas:
+            return pa.schema([(f, pa.null()) for f in fields])
+        return pa.unify_schemas(schemas, promote_options='permissive')
+
+    def _conflicting_fields(self, fields: List[str]) -> set:
+        """Fields whose values cannot share one Arrow type (e.g. int and str)."""
+        conflicts = set()
+        per_field: Dict[str, List[Any]] = {f: [] for f in fields}
+        for batch in self._staged_batches(fields):
+            for f in fields:
+                if f in conflicts:
+                    continue
+                try:
+                    per_field[f].append(pa.array([r[f] for r in batch]).type)
+                except (pa.ArrowInvalid, pa.ArrowTypeError):
+                    conflicts.add(f)
+        for f, types in per_field.items():
+            if f in conflicts or len(set(types)) < 2:
+                continue
+            try:
+                pa.unify_schemas([pa.schema([(f, t)]) for t in types],
+                                 promote_options='permissive')
+            except (pa.ArrowInvalid, pa.ArrowTypeError, pa.ArrowNotImplementedError):
+                conflicts.add(f)
+        return conflicts
+
+    def _render_parquet(self, dest: str) -> None:
+        fields = list(self._fields)
+        stringify: set = set()
+        try:
+            schema = self._parquet_schema(fields, stringify)
+        except (pa.ArrowInvalid, pa.ArrowTypeError, pa.ArrowNotImplementedError):
+            stringify = self._conflicting_fields(fields)
+            logging.warning(f"Parquet output {self.output_path}: fields with mixed types "
+                            f"stored as strings: {sorted(stringify)}")
+            schema = self._parquet_schema(fields, stringify)
+        with pq.ParquetWriter(dest, schema) as writer:
+            for batch in self._staged_batches(fields, stringify):
+                writer.write_table(pa.Table.from_pylist(batch, schema=schema))
 
     def _write_buffered(self) -> None:
         if self.fmt in {'.xlsx', '.xls'}:
@@ -121,7 +288,7 @@ class StreamingWriter:
                 wb = xlsxwriter.Workbook(self.output_path, {'constant_memory': True})
                 ws = wb.add_worksheet()
                 if self._buffer:
-                    headers = list(self._buffer[0].keys())
+                    headers = list(dict.fromkeys(k for row in self._buffer for k in row))
                     for c, h in enumerate(headers):
                         ws.write(0, c, h)
                     for r, row in enumerate(self._buffer, 1):
@@ -133,13 +300,20 @@ class StreamingWriter:
                 wb.close()
             else:
                 pd.DataFrame.from_records(self._buffer).to_excel(self.output_path, index=False)
-        elif self.fmt == '.parquet':
-            pq.write_table(pa.Table.from_pylist(self._buffer), self.output_path)
 
     def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
         try:
             if exc_type is None:
-                if self.fmt == '.json' and self._file is not None:
+                if self._staged:
+                    self._file.close()
+                    self._tmp_path = _tmp_sibling(self.output_path, 'tmp')
+                    if self.fmt == '.csv':
+                        self._render_csv(self._tmp_path)
+                    else:
+                        self._render_parquet(self._tmp_path)
+                    os.replace(self._tmp_path, self.output_path)
+                    self._tmp_path = None
+                elif self.fmt == '.json' and self._file is not None:
                     self._file.write('\n]\n')
                     if self._tmp_path:
                         self._file.close()
@@ -153,11 +327,13 @@ class StreamingWriter:
                     self._file.close()
                 except Exception:
                     pass
-            if self._tmp_path and exc_type is not None:
-                try:
-                    os.remove(self._tmp_path)
-                except OSError:
-                    pass
+            for leftover in (self._stage_path, self._tmp_path):
+                if leftover:
+                    try:
+                        os.remove(leftover)
+                    except OSError:
+                        pass
+            self._stage_path = self._tmp_path = None
 
 
 def _derive_path(base: str, tag: str) -> str:

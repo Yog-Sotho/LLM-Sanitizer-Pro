@@ -1,4 +1,5 @@
 """Tests for secret / credential detection and redaction."""
+import pytest
 from sanitizer_pro import Sanitizer, SanitizerConfig
 from sanitizer_pro.pii import PseudoRegistry
 from sanitizer_pro.secrets import contains_secret, redact_secrets
@@ -109,3 +110,73 @@ class TestPipelineIntegration:
             res = s.process_record(
                 {"text": "primary key AKIAIOSFODNN7EXAMPLE for the backup service account"})
         assert "AWS_ACCESS_KEY_0001" in res.record["text"]
+
+
+class TestCoverage:
+    """Credential formats the original rule set missed."""
+
+    def test_huggingface_tokens(self):
+        # Fixtures are assembled at runtime so no token-shaped literal is committed.
+        fake_hf = "hf" + "_" + "AbCdEfGhIj" * 3 + "KlMn"
+        assert redact_secrets(f"token {fake_hf}") == "token [SECRET_HF_TOKEN]"
+        assert "[SECRET_HF_TOKEN]" in redact_secrets("api_org_" + "Q" * 34)
+        # library identifiers with underscores are not tokens
+        assert redact_secrets("call hf_hub_download(repo)") == "call hf_hub_download(repo)"
+
+    def test_gitlab_npm_pypi(self):
+        assert redact_secrets("glpat" + "-" + "AbCdEfGhIj" * 2) == "[SECRET_GITLAB_TOKEN]"
+        assert redact_secrets("npm_" + "a1" * 18) == "[SECRET_NPM_TOKEN]"
+        assert redact_secrets("pypi-AgEIcHlwaS5vcmc" + "x" * 60) == "[SECRET_PYPI_TOKEN]"
+
+    def test_aws_secret_key_keeps_variable_name(self):
+        out = redact_secrets("aws_secret_access_key = wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY")
+        assert out == "aws_secret_access_key = [SECRET_AWS_SECRET_KEY]"
+
+    def test_azure_account_key(self):
+        conn = "DefaultEndpointsProtocol=https;AccountName=acct;AccountKey=" + "A" * 86 + "==;"
+        assert redact_secrets(conn) == \
+            "DefaultEndpointsProtocol=https;AccountName=acct;AccountKey=[SECRET_AZURE_KEY];"
+
+    @pytest.mark.parametrize("label", ["ENCRYPTED PRIVATE KEY", "PRIVATE KEY",
+                                       "OPENSSH PRIVATE KEY", "PGP PRIVATE KEY BLOCK"])
+    def test_all_private_key_armors(self, label):
+        block = f"-----BEGIN {label}-----\nMIIabc\n-----END {label}-----"
+        assert redact_secrets(f"k:\n{block}\nok") == "k:\n[SECRET_PRIVATE_KEY]\nok"
+
+    def test_truncated_private_key_still_redacted(self):
+        assert redact_secrets("dump -----BEGIN RSA PRIVATE KEY-----\nMIIBOgIBAAJBAKj34") == \
+            "dump [SECRET_PRIVATE_KEY]"
+
+    def test_public_key_untouched(self):
+        text = "-----BEGIN PUBLIC KEY-----\nMIIBIjAN\n-----END PUBLIC KEY-----"
+        assert redact_secrets(text) == text
+
+
+class TestPrecisionAndContext:
+    def test_connection_string_stops_at_quote(self):
+        assert redact_secrets('url = "postgres://u:p@host:5432/db", next') == \
+            'url = "[SECRET_CONNECTION_STRING]", next'
+        assert redact_secrets("see mysql://root:pw@db/app.") == "see [SECRET_CONNECTION_STRING]."
+
+    def test_mongodb_multi_host_kept_whole(self):
+        uri = "mongodb://u:p@h1:27017,h2:27017/db?replicaSet=rs0"
+        assert redact_secrets(f"{uri} end") == "[SECRET_CONNECTION_STRING] end"
+
+    def test_generic_keeps_variable_name_and_quotes(self):
+        assert redact_secrets('api_key = "aB3xY9zK1mN4pQ7rS2tU5v"') == \
+            'api_key = "[SECRET_GENERIC]"'
+
+    def test_generic_unquoted_env_style(self):
+        assert redact_secrets("PASSWORD=x7Kq92LmZp4Rt8Wv") == "PASSWORD=[SECRET_GENERIC]"
+
+    @pytest.mark.parametrize("text", [
+        'password = get_password_from_env',      # identifier, not a secret
+        'api_key = "aaaaaaaaaaaaaaaaaaaa"',       # zero entropy placeholder
+        'secret_key = "your-secret-key-here"',    # documentation placeholder
+    ])
+    def test_generic_low_entropy_ignored(self, text):
+        assert redact_secrets(text) == text
+
+    def test_masked_generic_tail_comes_from_value(self):
+        out = redact_secrets('api_key = "aB3xY9zK1mN4pQ7rS2tU5v"', mask=True)
+        assert out == 'api_key = "[SECRET…tU5v]"'

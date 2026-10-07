@@ -39,7 +39,8 @@ from sanitizer_pro.config import (
     load_config_file, collect_explicit_args, apply_config_to_args,
     load_custom_pii_patterns, load_field_config, build_field_ops, load_quality_script
 )
-from sanitizer_pro.core import sanitize_record, TokenTruncator, get_record_hash
+from sanitizer_pro.core import sanitize_record, TokenTruncator, get_record_hash, make_report_redactor
+from sanitizer_pro.decontam import full_text_for_decontam
 from sanitizer_pro.dedup import make_deduper
 from sanitizer_pro.pii import PseudoRegistry
 from sanitizer_pro.io.readers import read_records
@@ -139,7 +140,9 @@ def build_parser() -> argparse.ArgumentParser:
     qg.add_argument('--min-chars', type=int, default=50)
     qg.add_argument('--max-chars', type=int, default=20000)
     qg.add_argument('--min-words', type=int, default=8)
-    qg.add_argument('--min-ascii-ratio', type=float, default=0.85)
+    qg.add_argument('--min-ascii-ratio', type=float, default=0.0,
+                    help='Reject records whose ASCII-character share is below this '
+                         '(0 = off, the default; e.g. 0.85 keeps mostly-English text).')
     qg.add_argument('--min-unique-ratio', type=float, default=0.25)
     qg.add_argument('--text-fields', default='', help='Comma-separated fields for quality scoring.')
     qg.add_argument('--text-fields-depth', type=int, default=20)
@@ -279,7 +282,10 @@ def build_parser() -> argparse.ArgumentParser:
     rt.add_argument('--stats-file', default=None, metavar='PATH')
     rt.add_argument('--report', default=None, metavar='PATH',
                     help='Write a self-contained HTML audit report (removal funnel, PII '
-                         'counts by type, sample diffs) to PATH.')
+                         'counts by type, sample diffs) to PATH. Samples are redacted.')
+    rt.add_argument('--report-raw-samples', action='store_true',
+                    help='Include verbatim (unredacted) record samples in --report. The report '
+                         'then contains raw PII/secrets; handle it like the input data.')
     rt.add_argument('--resume', action='store_true',
                     help='Checkpoint progress to <output>.checkpoint.json and, when a '
                          'checkpoint exists, continue the run from where it stopped '
@@ -341,7 +347,7 @@ def main() -> None:
     if args.config:
         try:
             cfg = load_config_file(args.config)
-            apply_config_to_args(args, cfg, explicit_args)
+            apply_config_to_args(args, cfg, explicit_args, parser)
         except Exception as exc:
             print(f"ERROR loading config: {exc}", file=sys.stderr)
             sys.exit(1)
@@ -458,6 +464,7 @@ def main() -> None:
     resume_skip = 0
     resume_stats: Optional[Any] = None
     resume_pseudo: Optional[Dict[str, Any]] = None
+    resume_dedup_mark: Optional[int] = None
     if args.resume:
         from sanitizer_pro.checkpoint import load_checkpoint, warn_about_volatile_state
         problems = []
@@ -481,6 +488,18 @@ def main() -> None:
             resume_skip = int(ckpt['records_read'])
             resume_stats = ckpt['stats']
             resume_pseudo = ckpt.get('pseudo')
+            resume_dedup_mark = ckpt.get('dedup_mark')
+            if ckpt.get('rng') is not None:
+                from sanitizer_pro.checkpoint import rng_from_state
+                random.setstate(rng_from_state(ckpt['rng']))
+            from sanitizer_pro.checkpoint import truncate_output_to_checkpoint
+            try:
+                discarded = truncate_output_to_checkpoint(args.output, ckpt.get('output_bytes'))
+            except ConfigurationError as exc:
+                logging.error(str(exc)); sys.exit(1)
+            if discarded:
+                logging.info(f"Discarded {discarded:,} output bytes written after the last "
+                             "checkpoint; those records are re-processed.")
             warn_about_volatile_state(args)
             logging.info(f"Resuming from checkpoint: skipping {resume_skip:,} "
                          "already-processed input records, appending to output.")
@@ -565,6 +584,19 @@ def main() -> None:
         logging.error(str(exc)); sys.exit(1)
     run_stats = RunStats.from_state(resume_stats) if resume_stats else RunStats()
 
+    from sanitizer_pro.dedup import SQLiteDeduper
+    durable_dedup = (isinstance(deduper, SQLiteDeduper) and bool(args.dedup_db_path)
+                     and args.resume)
+    if durable_dedup and resume_stats is not None:
+        if resume_dedup_mark is not None:
+            forgotten = deduper.rollback_to(resume_dedup_mark)
+            if forgotten:
+                logging.info(f"Dedup DB: forgot {forgotten:,} hashes recorded after the "
+                             "last checkpoint.")
+        else:
+            logging.warning("Checkpoint has no dedup mark; hashes recorded after it may "
+                            "drop records as false duplicates.")
+
     try:
         record_iter: Iterator[Dict[str, Any]] = read_records(
             args.input, encoding=args.encoding, paragraph_mode=args.paragraph_mode,
@@ -572,7 +604,7 @@ def main() -> None:
             csv_columns=args.csv_columns_list, excel_sheet=excel_sheet,
             excel_warn_mb=args.excel_warn_size,
             input_format=None if is_hub_input else input_fmt,
-            json_path=args.json_path, hf_cache=args.hf_cache
+            json_path=args.json_path, hf_cache=args.hf_cache, yield_malformed=True
         )
     except Exception as exc:
         logging.critical(f"Failed to open input: {exc}"); sys.exit(1)
@@ -588,23 +620,38 @@ def main() -> None:
         record_iter = _skip_consumed(record_iter, resume_skip)
 
     def _maybe_checkpoint(writer: Any) -> None:
+        """Called only between records, so the snapshot is consistent: every
+        record counted in `total` is fully handled and written."""
         if not args.resume or run_stats.total % args.checkpoint_interval != 0:
             return
-        from sanitizer_pro.checkpoint import save_checkpoint
-        if writer is not None:
-            writer.flush()
+        from sanitizer_pro.checkpoint import rng_to_state, save_checkpoint
+        # Order matters: make output and dedup state durable *before* the
+        # checkpoint that references them. A crash in between leaves the
+        # previous checkpoint, whose (smaller) marks make resume discard the
+        # newer rows and hashes.
+        output_bytes = writer.durable_size() if writer is not None else None
+        dedup_mark = deduper.high_water_mark() if durable_dedup else None
         if deduper is not None and hasattr(deduper, 'flush'):
             deduper.flush()
         save_checkpoint(args.output, input_path=args.input, records_read=run_stats.total,
                         stats_state=run_stats.to_state(),
-                        pseudo_state=pseudo_registry.to_state() if pseudo_registry else None)
+                        pseudo_state=pseudo_registry.to_state() if pseudo_registry else None,
+                        output_bytes=output_bytes, dedup_mark=dedup_mark,
+                        rng_state=rng_to_state(random.getstate()))
 
     use_progress = TQDM_AVAILABLE and not args.no_progress and not args.quiet and args.input != _STDIN
 
     audit_samples = None
     if args.report:
         from sanitizer_pro.report import AuditSampleCollector
-        audit_samples = AuditSampleCollector()
+        if args.report_raw_samples:
+            logging.warning("--report-raw-samples: the audit report will contain unredacted "
+                            "records (PII/secrets). Handle it like the raw input data.")
+        audit_samples = AuditSampleCollector(
+            raw=args.report_raw_samples,
+            redact=make_report_redactor(
+                args.remove_pii, args.redact_secrets, extra_pii=extra_pii,
+                ner_redactor=ner_redactor, max_depth=args.max_depth))
 
     # (score, sanitized, quality_text, lang) survivors awaiting top-P% selection
     topk_buffer: Optional[List[Tuple[Optional[float], Dict[str, Any], str, Optional[str]]]] = \
@@ -629,13 +676,14 @@ def main() -> None:
                     run_stats.chat_invalid_reasons.get(chat_reason, 0) + 1
                 logging.debug(f"Chat validation rejected record: {chat_reason}")
                 if audit_samples is not None:
-                    audit_samples.add_dropped('chat', sanitized)
+                    audit_samples.add_dropped('chat', sanitized, redacted=True)
                 return
 
-        if contamination_index is not None and contamination_index.is_contaminated(quality_text):
+        if contamination_index is not None and contamination_index.is_contaminated(
+                full_text_for_decontam(sanitized)):
             run_stats.filtered_contaminated += 1
             if audit_samples is not None:
-                audit_samples.add_dropped('contaminated', sanitized)
+                audit_samples.add_dropped('contaminated', sanitized, redacted=True)
             return
 
         score: Optional[float] = None
@@ -644,7 +692,7 @@ def main() -> None:
             if args.quality_min_score is not None and score < args.quality_min_score:
                 run_stats.filtered_low_score += 1
                 if audit_samples is not None:
-                    audit_samples.add_dropped('low_score', sanitized)
+                    audit_samples.add_dropped('low_score', sanitized, redacted=True)
                 return
 
         if args.sample is not None and random.random() >= args.sample:
@@ -744,6 +792,7 @@ def main() -> None:
             if args.dry_run and run_stats.total > args.dry_run_size: break
             if not isinstance(record, dict):
                 run_stats.malformed += 1
+                _maybe_checkpoint(writer)
                 continue
             
             pii_before = sum(run_stats.pii_counts.values())
@@ -777,7 +826,8 @@ def main() -> None:
         else:
             writer_ctx = StreamingWriter(args.output, output_fmt, args.encoding,
                                          txt_fallback_field=args.txt_fallback_field,
-                                         append=resume_stats is not None)
+                                         append=resume_stats is not None,
+                                         durable=args.resume)
             with writer_ctx as writer: _run(writer=writer)
         if args.resume:
             from sanitizer_pro.checkpoint import clear_checkpoint
@@ -786,15 +836,14 @@ def main() -> None:
         logging.warning("Interrupted — flushing output …")
         if writer_ctx is not None and hasattr(writer_ctx, 'flush'): writer_ctx.flush()
         if args.resume:
-            from sanitizer_pro.checkpoint import save_checkpoint
-            try:
-                save_checkpoint(args.output, input_path=args.input,
-                                records_read=run_stats.total,
-                                stats_state=run_stats.to_state(),
-                                pseudo_state=pseudo_registry.to_state() if pseudo_registry else None)
-                logging.info("Checkpoint saved; rerun the same command with --resume to continue.")
-            except Exception as exc:
-                logging.warning(f"Could not save checkpoint on interrupt: {exc}")
+            # No checkpoint here: the interrupt may have landed mid-record, so
+            # the last periodic checkpoint is the latest consistent state.
+            from sanitizer_pro.checkpoint import checkpoint_path
+            if os.path.exists(checkpoint_path(args.output)):
+                logging.info("Rerun the same command with --resume to continue from the "
+                             "last checkpoint.")
+            else:
+                logging.info("No checkpoint was reached yet; a rerun starts from the beginning.")
         sys.exit(130)
     except Exception as exc:
         logging.critical(f"Fatal error: {exc}", exc_info=True)

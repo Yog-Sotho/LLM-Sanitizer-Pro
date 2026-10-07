@@ -11,6 +11,7 @@ from sanitizer_pro.secrets import redact_secrets as _redact_secrets_fn
 from sanitizer_pro.quality import extract_text_for_quality, _check_quality_reason, detect_language, is_code_heuristic, contains_profanity
 
 FieldOps = Tuple[Dict[str, str], Set[str], Set[str], Set[str]]
+_TOKEN_RE = re.compile(r'\S+')
 
 class TokenTruncator:
     def __init__(self, max_tokens: int, tokenizer_name: str = 'whitespace') -> None:
@@ -31,8 +32,12 @@ class TokenTruncator:
         if self._hf:
             ids = self._hf.encode(text, add_special_tokens=False)
             return self._hf.decode(ids[:self.max_tokens], skip_special_tokens=True) if len(ids) > self.max_tokens else text
-        words = text.split()
-        return ' '.join(words[:self.max_tokens]) if len(words) > self.max_tokens else text
+        # Cut after the Nth whitespace-delimited token, keeping the original
+        # spacing and newlines (code/markdown structure) of what remains.
+        for i, m in enumerate(_TOKEN_RE.finditer(text), 1):
+            if i == self.max_tokens:
+                return text[:m.end()] if text[m.end():].strip() else text
+        return text
 
 def _sanitize_value(
     v: Any, *, remove_html: bool, remove_pii: bool, pii_mask: bool,
@@ -71,6 +76,29 @@ def _sanitize_value(
     if isinstance(v, dict): return {k: _sanitize_value(val, **kw) for k, val in v.items()}
     if isinstance(v, list): return [_sanitize_value(item, **kw) for item in v]
     return v
+
+def make_report_redactor(
+    remove_pii: bool, redact_secrets: bool, extra_pii: Optional[List] = None,
+    ner_redactor: Optional[Any] = None, max_depth: int = _MAX_DEPTH_DEFAULT,
+) -> Optional[Callable[[Any], Any]]:
+    """Redactor for audit-report samples of dropped records.
+
+    Uses plain token replacement (no masking, no pseudonym registry) so it
+    neither leaks partial values nor mutates the run's pseudonym map. Returns
+    None when the run redacts nothing (samples then mirror the data as-is)."""
+    if not (remove_pii or redact_secrets):
+        return None
+
+    def _redact(record: Any) -> Any:
+        return _sanitize_value(
+            record, remove_html=False, remove_pii=remove_pii, pii_mask=False,
+            extra_pii=extra_pii, pseudo_registry=None, field_pii_only=True,
+            field_no_clean=False, max_depth=max_depth, truncator=None,
+            ner_redactor=ner_redactor if remove_pii else None, pii_counters=None,
+            redact_secrets=redact_secrets)
+
+    return _redact
+
 
 def sanitize_record(
     record: Any, args: argparse.Namespace, text_fields: Optional[List[str]] = None,

@@ -20,7 +20,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Iterable, Iterator, List, Optional, Tuple
 
-from sanitizer_pro.core import TokenTruncator, get_record_hash, sanitize_record
+from sanitizer_pro.core import TokenTruncator, get_record_hash, make_report_redactor, sanitize_record
+from sanitizer_pro.decontam import full_text_for_decontam
 from sanitizer_pro.dedup import make_deduper
 from sanitizer_pro.pii import PseudoRegistry
 from sanitizer_pro.stats import RunStats
@@ -47,7 +48,7 @@ class SanitizerConfig:
     min_chars: int = 50
     max_chars: int = 20000
     min_words: int = 8
-    min_ascii_ratio: float = 0.85
+    min_ascii_ratio: float = 0.0          # 0 = off (non-English text is kept)
     min_unique_ratio: float = 0.25
     reject_allcaps: bool = False
     allcaps_min_len: int = 50
@@ -76,7 +77,7 @@ class SanitizerConfig:
     dedup_normalize: bool = False
 
     # Decontamination
-    decontaminate: Optional[List[str]] = None   # benchmark names
+    decontaminate: Optional[List[str]] = None   # benchmark names, or ['all']
     decontam_refs: Optional[List[str]] = None   # local reference files
     decontam_ngram: int = 8
     decontam_min_hits: int = 1
@@ -100,6 +101,10 @@ class SanitizerConfig:
     format_instruct: bool = False
     max_tokens: Optional[int] = None
     tokenizer: str = 'whitespace'
+
+    # Audit report: include verbatim (unredacted) samples. Off by default
+    # because the report would then contain raw PII/secrets.
+    report_raw_samples: bool = False
 
     # Field-level operations: (renames, drops, pii_only, no_clean)
     field_ops: Optional[Tuple[Dict[str, str], set, set, set]] = None
@@ -154,8 +159,6 @@ class Sanitizer:
         self.config.validate()
         c = self.config
         self.stats = RunStats()
-        from sanitizer_pro.report import AuditSampleCollector
-        self.audit_samples = AuditSampleCollector()
         self._args = _ArgsView(c)
 
         self._lang_filter = {x.lower() for x in c.lang_filter} if c.lang_filter else None
@@ -168,6 +171,13 @@ class Sanitizer:
             self._ner = NERRedactor(backend=c.pii_ner_backend, entities=c.pii_ner_entities,
                                     model=c.pii_ner_model)
 
+        from sanitizer_pro.report import AuditSampleCollector
+        self.audit_samples = AuditSampleCollector(
+            raw=c.report_raw_samples,
+            redact=make_report_redactor(c.remove_pii, c.redact_secrets,
+                                        extra_pii=c.extra_pii_patterns,
+                                        ner_redactor=self._ner, max_depth=c.max_depth))
+
         self._deduper = None
         if c.deduplicate or c.fuzzy_dedup or c.semantic_dedup:
             self._deduper = make_deduper(
@@ -177,9 +187,13 @@ class Sanitizer:
 
         self._contamination = None
         if c.decontaminate or c.decontam_refs:
-            from sanitizer_pro.decontam import build_index
+            from sanitizer_pro.decontam import build_index, resolve_benchmark_names
+            names = c.decontaminate
+            if names:  # validates names and expands 'all', like the CLI
+                names = resolve_benchmark_names(
+                    names if isinstance(names, str) else ','.join(names))
             self._contamination = build_index(
-                benchmarks=c.decontaminate, ref_files=c.decontam_refs,
+                benchmarks=names, ref_files=c.decontam_refs,
                 cache_dir=c.decontam_cache, ngram=c.decontam_ngram,
                 min_hits=c.decontam_min_hits)
 
@@ -253,12 +267,13 @@ class Sanitizer:
                 self.stats.filtered_chat += 1
                 self.stats.chat_invalid_reasons[chat_reason] = \
                     self.stats.chat_invalid_reasons.get(chat_reason, 0) + 1
-                self.audit_samples.add_dropped('chat', sanitized)
+                self.audit_samples.add_dropped('chat', sanitized, redacted=True)
                 return ProcessResult(None, False, f'chat:{chat_reason}')
 
-        if self._contamination is not None and self._contamination.is_contaminated(quality_text):
+        if self._contamination is not None and self._contamination.is_contaminated(
+                full_text_for_decontam(sanitized)):
             self.stats.filtered_contaminated += 1
-            self.audit_samples.add_dropped('contaminated', sanitized)
+            self.audit_samples.add_dropped('contaminated', sanitized, redacted=True)
             return ProcessResult(None, False, 'contaminated')
 
         score: Optional[float] = None
@@ -266,7 +281,7 @@ class Sanitizer:
             score = self._scorer.score(quality_text)
             if c.quality_min_score is not None and score < c.quality_min_score:
                 self.stats.filtered_low_score += 1
-                self.audit_samples.add_dropped('low_score', sanitized)
+                self.audit_samples.add_dropped('low_score', sanitized, redacted=True)
                 return ProcessResult(None, False, 'low_score', score=score)
 
         if self._deduper is not None:

@@ -6,6 +6,11 @@ interrupted, rerunning the same command with ``--resume`` skips the
 already-consumed input records, restores statistics and pseudonym state, and
 appends to the existing output. The checkpoint is deleted on success.
 
+A checkpoint is a consistent snapshot: it records the durable output size, so
+rows written after it (lost progress from a hard crash) are truncated away on
+resume instead of being duplicated, and the SQLite dedup high-water mark, so
+hashes of those discarded rows are forgotten too.
+
 Exact-dedup state is only durable with ``--dedup-backend sqlite`` and an
 explicit ``--dedup-db-path``; with the in-memory backends a resumed run
 restarts dedup from empty (a warning is emitted).
@@ -14,11 +19,12 @@ import json
 import logging
 import os
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from sanitizer_pro.utils import ConfigurationError
 
-CHECKPOINT_VERSION = 1
+CHECKPOINT_VERSION = 2
+_READABLE_VERSIONS = (1, 2)  # v1 lacks output_bytes / dedup_mark / rng
 
 
 def checkpoint_path(output_path: str) -> str:
@@ -36,13 +42,19 @@ def input_fingerprint(input_path: str) -> Dict[str, Any]:
 
 def save_checkpoint(output_path: str, *, input_path: str, records_read: int,
                     stats_state: Dict[str, Any],
-                    pseudo_state: Optional[Dict[str, Any]] = None) -> None:
+                    pseudo_state: Optional[Dict[str, Any]] = None,
+                    output_bytes: Optional[int] = None,
+                    dedup_mark: Optional[int] = None,
+                    rng_state: Optional[List[Any]] = None) -> None:
     payload = {
         'version': CHECKPOINT_VERSION,
         'input': input_fingerprint(input_path),
         'records_read': records_read,
         'stats': stats_state,
         'pseudo': pseudo_state,
+        'output_bytes': output_bytes,
+        'dedup_mark': dedup_mark,
+        'rng': rng_state,
     }
     path = checkpoint_path(output_path)
     tmp = path + '.tmp'
@@ -60,7 +72,7 @@ def load_checkpoint(output_path: str, input_path: str) -> Optional[Dict[str, Any
     except Exception as exc:
         raise ConfigurationError(f"Corrupt checkpoint {path}: {exc}. "
                                  "Delete it to start fresh.") from None
-    if payload.get('version') != CHECKPOINT_VERSION:
+    if payload.get('version') not in _READABLE_VERSIONS:
         raise ConfigurationError(
             f"Checkpoint {path} has unsupported version {payload.get('version')}. "
             "Delete it to start fresh.")
@@ -70,6 +82,36 @@ def load_checkpoint(output_path: str, input_path: str) -> Optional[Dict[str, Any
             f"Checkpoint {path} was created for a different input "
             f"({payload.get('input')} vs {current}). Delete it to start fresh.")
     return payload
+
+
+def truncate_output_to_checkpoint(output_path: str, output_bytes: Optional[int]) -> int:
+    """Cut the output back to the size recorded in the checkpoint, discarding
+    rows written after it. Returns the number of bytes removed."""
+    if output_bytes is None:
+        logging.warning(
+            "Checkpoint predates output-size tracking: rows written after it (if the "
+            "previous run crashed) cannot be detected and may be duplicated.")
+        return 0
+    size = os.path.getsize(output_path) if os.path.exists(output_path) else 0
+    if size < output_bytes:
+        raise ConfigurationError(
+            f"Output {output_path} is shorter ({size} bytes) than the checkpoint records "
+            f"({output_bytes} bytes); it was modified or replaced. Delete the checkpoint "
+            "to start fresh.")
+    if size > output_bytes:
+        os.truncate(output_path, output_bytes)
+    return size - output_bytes
+
+
+def rng_to_state(state: Any) -> List[Any]:
+    """random.getstate() as JSON-serializable lists."""
+    version, internal, gauss = state
+    return [version, list(internal), gauss]
+
+
+def rng_from_state(state: List[Any]) -> Any:
+    version, internal, gauss = state
+    return (version, tuple(internal), gauss)
 
 
 def clear_checkpoint(output_path: str) -> None:
