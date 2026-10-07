@@ -1,0 +1,55 @@
+name: Docs
+
+# Builds the documentation site (strict) on pull requests and deploys it to
+# GitHub Pages from main. One-time setup: Settings -> Pages -> Source:
+# "GitHub Actions".
+on:
+  push:
+    branches: [main]
+  pull_request:
+    paths:
+      - 'docs/**'
+      - 'mkdocs.yml'
+      - 'README.md'
+      - 'CHANGELOG.md'
+      - 'sanitizer_pro/cli.py'
+      - '.github/workflows/docs.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .[docs]
+      - name: CLI reference is current
+        run: python scripts/gen_cli_reference.py --check
+      - name: Build
+        run: mkdocs build --strict
+      - uses: actions/upload-pages-artifact@v3
+        if: github.event_name != 'pull_request'
+        with:
+          path: site/
+
+  deploy:
+    if: github.event_name != 'pull_request'
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

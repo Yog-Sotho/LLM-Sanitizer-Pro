@@ -65,6 +65,11 @@ class StreamingWriter:
 
     APPENDABLE_FORMATS = {'.jsonl', '.txt', '.csv'}
 
+    @property
+    def paths(self) -> List[str]:
+        """Files this writer produces (for the run manifest)."""
+        return [] if self.output_path == _STDOUT else [self.output_path]
+
     def __init__(self, output_path: str, fmt: str, encoding: str = 'utf-8',
                  txt_fallback_field: Optional[str] = None, append: bool = False,
                  durable: bool = False) -> None:
@@ -361,6 +366,8 @@ class ShardedWriter:
         self._shard_index = 0
         self._in_shard = 0
         self._writer: Optional[StreamingWriter] = None
+        self.paths: List[str] = []
+
 
     def __enter__(self) -> 'ShardedWriter':
         self._open_next()
@@ -368,6 +375,7 @@ class ShardedWriter:
 
     def _open_next(self) -> StreamingWriter:
         path = _derive_path(self.output_path, f"{self._shard_index:05d}")
+        self.paths.append(path)
         writer = StreamingWriter(path, self.fmt, self.encoding,
                                  txt_fallback_field=self.txt_fallback_field)
         writer.__enter__()
@@ -448,6 +456,10 @@ class SplitWriter:
             self._cumulative.append(acc)
         self._cumulative[-1] = 1.0
         self._writers: Dict[str, StreamingWriter] = {}
+
+    @property
+    def paths(self) -> List[str]:
+        return [_derive_path(self.output_path, name) for name in self._names]
 
     def __enter__(self) -> 'SplitWriter':
         for name in self._names:

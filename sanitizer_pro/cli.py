@@ -114,6 +114,9 @@ def build_parser() -> argparse.ArgumentParser:
   sanitize --input data.jsonl --output clean.jsonl --deduplicate --remove-pii
   sanitize --input data.jsonl --output chatml.jsonl --fuzzy-dedup --format-chatml
   sanitize --input huge.jsonl --output clean.jsonl --jobs 8 --dedup-backend sqlite
+  sanitize --input raw/ --output clean.jsonl --remove-pii --manifest run.json \
+           --dataset-card README.md
+  sanitize diff old/run.json new/run.json       # compare two runs (sanitize diff -h)
 """
     )
 
@@ -134,24 +137,36 @@ def build_parser() -> argparse.ArgumentParser:
 
     # Quality Filters
     qg = parser.add_argument_group('Quality Filters')
-    qg.add_argument('--min-chars', type=int, default=D.min_chars)
-    qg.add_argument('--max-chars', type=int, default=D.max_chars)
-    qg.add_argument('--min-words', type=int, default=D.min_words)
+    qg.add_argument('--min-chars', type=int, default=D.min_chars,
+                   help='Drop records whose quality text is shorter than this many characters.')
+    qg.add_argument('--max-chars', type=int, default=D.max_chars,
+                   help='Drop records whose quality text is longer than this many characters.')
+    qg.add_argument('--min-words', type=int, default=D.min_words,
+                   help='Drop records with fewer words (each CJK/Thai character counts as a word).')
     qg.add_argument('--min-ascii-ratio', type=float, default=D.min_ascii_ratio,
                     help='Reject records whose ASCII-character share is below this '
                          '(0 = off, the default; e.g. 0.85 keeps mostly-English text).')
-    qg.add_argument('--min-unique-ratio', type=float, default=D.min_unique_ratio)
+    qg.add_argument('--min-unique-ratio', type=float, default=D.min_unique_ratio,
+                   help='Drop records whose share of distinct words is lower (repetitive text).')
     qg.add_argument('--text-fields', default='', help='Comma-separated fields for quality scoring.')
-    qg.add_argument('--text-fields-depth', type=int, default=D.text_fields_depth)
-    qg.add_argument('--reject-allcaps', action='store_true')
-    qg.add_argument('--allcaps-min-len', type=int, default=D.allcaps_min_len)
-    qg.add_argument('--allcaps-min-alpha', type=int, default=D.allcaps_min_alpha)
-    qg.add_argument('--require-fields', default='')
-    qg.add_argument('--quality-script', default=None, metavar='PATH')
-    qg.add_argument('--max-depth', type=int, default=D.max_depth)
+    qg.add_argument('--text-fields-depth', type=int, default=D.text_fields_depth,
+                   help='How deep to descend into nested fields when collecting quality text.')
+    qg.add_argument('--reject-allcaps', action='store_true',
+                   help='Drop records that are almost entirely upper case.')
+    qg.add_argument('--allcaps-min-len', type=int, default=D.allcaps_min_len,
+                   help='Only apply --reject-allcaps to texts at least this long.')
+    qg.add_argument('--allcaps-min-alpha', type=int, default=D.allcaps_min_alpha,
+                   help='Only apply --reject-allcaps when the text has this many letters.')
+    qg.add_argument('--require-fields', default='',
+                   help='Comma-separated fields every record must have (non-empty).')
+    qg.add_argument('--quality-script', default=None, metavar='PATH',
+                   help='Python file defining keep(record) -> bool, applied after the built-in gates.')
+    qg.add_argument('--max-depth', type=int, default=D.max_depth,
+                   help='Maximum nesting depth cleaned and redacted inside a record.')
     qg.add_argument('--lang-filter', default='',
                     help='Keep only these languages, e.g. en,zh or eng,cmn (ISO 639-1 or -3).')
-    qg.add_argument('--lang-confidence', type=float, default=D.lang_confidence)
+    qg.add_argument('--lang-confidence', type=float, default=D.lang_confidence,
+                   help='Minimum language-ID confidence for --lang-filter to keep a record.')
     qg.add_argument('--lang-backend', default=D.lang_backend, choices=list(LANG_BACKENDS),
                     help='Language ID for --lang-filter: glotlid (fastText, 2000+ varieties; '
                          'default when fastText is installed), openlid, or langdetect.')
@@ -183,7 +198,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     # Features
     fg = parser.add_argument_group('Features')
-    fg.add_argument('--deduplicate', action='store_true')
+    fg.add_argument('--deduplicate', action='store_true',
+                   help='Drop exact duplicates (SHA-256 of the cleaned record).')
     fg.add_argument('--fuzzy-dedup', action='store_true',
                     help='Near-duplicate detection: MinHash over word 3-shingles, LSH '
                          'candidates verified by signature similarity. With '
@@ -205,12 +221,18 @@ def build_parser() -> argparse.ArgumentParser:
                     help='Nearest-neighbor index for --semantic-dedup: usearch (HNSW; '
                          'stays fast as the index grows) or lsh (no extra dependency; '
                          'slows down on large inputs). auto prefers usearch.')
-    fg.add_argument('--dedup-fields', default='')
-    fg.add_argument('--dedup-normalize', action='store_true')
-    fg.add_argument('--dedup-backend', default=D.dedup_backend, choices=list(DEDUP_BACKENDS))
-    fg.add_argument('--dedup-db-path', default=None, metavar='PATH')
-    fg.add_argument('--remove-pii', action='store_true')
-    fg.add_argument('--pii-mask', action='store_true')
+    fg.add_argument('--dedup-fields', default='',
+                   help='Comma-separated fields to hash for exact dedup (default: the whole record).')
+    fg.add_argument('--dedup-normalize', action='store_true',
+                   help='Lower-case and collapse whitespace before hashing for exact dedup.')
+    fg.add_argument('--dedup-backend', default=D.dedup_backend, choices=list(DEDUP_BACKENDS),
+                   help='Where dedup state lives: memory, or sqlite on disk (constant memory; also used by --fuzzy-dedup).')
+    fg.add_argument('--dedup-db-path', default=None, metavar='PATH',
+                   help='Keep the SQLite dedup database at PATH (needed for dedup across --resume).')
+    fg.add_argument('--remove-pii', action='store_true',
+                   help='Redact PII: emails, URLs, phones, payment cards, IBANs, SSNs, IP addresses.')
+    fg.add_argument('--pii-mask', action='store_true',
+                   help='Partially mask PII (j***n@example.com, ****-1111) instead of tokens.')
     fg.add_argument('--pii-pseudonymize', action='store_true',
                     help='Replace PII with stable pseudonyms (Person_0001, email_0002@…) '
                          'instead of [PII_…] tokens.')
@@ -222,11 +244,13 @@ def build_parser() -> argparse.ArgumentParser:
                          'per-run key is used.')
     fg.add_argument('--pseudo-map-file', default=None, metavar='PATH',
                     help='Write the original -> pseudonym map (sensitive) to PATH.')
-    fg.add_argument('--pii-patterns-file', default=None, metavar='PATH')
+    fg.add_argument('--pii-patterns-file', default=None, metavar='PATH',
+                   help='JSON file of extra PII regexes: [{"pattern": …, "token": …, "kind": …}].')
     fg.add_argument('--pii-ner', action='store_true',
                     help='Also detect PII with a named-entity model (person names by default). '
                          'Requires spacy (+en_core_web_sm) or transformers.')
-    fg.add_argument('--pii-ner-backend', default=D.pii_ner_backend, choices=list(NER_BACKENDS))
+    fg.add_argument('--pii-ner-backend', default=D.pii_ner_backend, choices=list(NER_BACKENDS),
+                   help='NER engine for --pii-ner (auto picks what is installed).')
     fg.add_argument('--pii-ner-entities', default='person', metavar='KINDS',
                     help='Comma-separated entity kinds to redact (default: person): person, '
                          'location, org; with --pii-ner-backend gliner also address, '
@@ -239,18 +263,27 @@ def build_parser() -> argparse.ArgumentParser:
                     help='Detect and redact credentials — API keys, tokens, private keys, '
                          'connection strings. Works with or without --remove-pii; honors '
                          '--pii-mask / --pii-pseudonymize.')
-    fg.add_argument('--clean-html', action='store_true')
-    fg.add_argument('--paragraph-mode', action='store_true')
-    fg.add_argument('--txt-fallback-field', default=None, metavar='FIELD')
-    fg.add_argument('--field-config', default=None, metavar='PATH')
-    fg.add_argument('--max-tokens', type=int, default=None)
-    fg.add_argument('--tokenizer', default=D.tokenizer)
-    fg.add_argument('--sample', type=float, default=None)
+    fg.add_argument('--clean-html', action='store_true',
+                   help='Strip HTML markup from strings that look like HTML.')
+    fg.add_argument('--paragraph-mode', action='store_true',
+                   help='For .txt input: one record per blank-line-separated paragraph, not per line.')
+    fg.add_argument('--txt-fallback-field', default=None, metavar='FIELD',
+                   help='For .txt output: the field to write when a record has no "text".')
+    fg.add_argument('--field-config', default=None, metavar='PATH',
+                   help='JSON list of per-field actions: rename (with "to"), drop, pii_only, no_clean.')
+    fg.add_argument('--max-tokens', type=int, default=None,
+                   help='Truncate each text field to N tokens (counted with --tokenizer).')
+    fg.add_argument('--tokenizer', default=D.tokenizer,
+                   help='Token counter: whitespace, or a Hugging Face tokenizer name.')
+    fg.add_argument('--sample', type=float, default=None,
+                   help='Keep this fraction of records (0-1), chosen by content hash (see --seed).')
     fg.add_argument('--seed', type=int, default=None,
                     help='Salt for --sample/--split. Both are decided by a hash of each '
                          "record's content, so results are reproducible across runs.")
-    fg.add_argument('--split', default=None, metavar='SPEC')
-    fg.add_argument('--quick', action='store_true')
+    fg.add_argument('--split', default=None, metavar='SPEC',
+                   help='Write splits by content hash, e.g. train=0.9,val=0.05,test=0.05 (out.train.jsonl, …).')
+    fg.add_argument('--quick', action='store_true',
+                   help='Shortcut for --remove-pii --deduplicate --clean-html --dedup-normalize.')
     fg.add_argument('--format-chatml', action='store_true', help='Format output as ChatML messages.')
     fg.add_argument('--format-instruct', action='store_true', help='Format output as Alpaca/Instruct schema.')
 
@@ -292,37 +325,64 @@ def build_parser() -> argparse.ArgumentParser:
 
     # CSV / Excel
     iog = parser.add_argument_group('CSV / Excel Options')
-    iog.add_argument('--csv-delimiter', default=None, metavar='CHAR')
-    iog.add_argument('--csv-no-header', action='store_true')
-    iog.add_argument('--csv-columns', default='')
-    iog.add_argument('--excel-sheet-name', default=None, metavar='NAME')
-    iog.add_argument('--excel-sheet-index', type=int, default=None, metavar='N')
-    iog.add_argument('--excel-warn-size', type=float, default=_EXCEL_WARN_MB_DEFAULT)
+    iog.add_argument('--csv-delimiter', default=None, metavar='CHAR',
+                   help='CSV field delimiter (default: comma; tab for .tsv).')
+    iog.add_argument('--csv-no-header', action='store_true',
+                   help='The CSV has no header row (columns become col_0, col_1, …).')
+    iog.add_argument('--csv-columns', default='',
+                   help='Comma-separated column names to use instead of the header row.')
+    iog.add_argument('--excel-sheet-name', default=None, metavar='NAME',
+                   help='Excel sheet to read, by name.')
+    iog.add_argument('--excel-sheet-index', type=int, default=None, metavar='N',
+                   help='Excel sheet to read, by position (0 = first).')
+    iog.add_argument('--excel-warn-size', type=float, default=_EXCEL_WARN_MB_DEFAULT,
+                   help='Warn when an Excel input is larger than this many MB (read in memory).')
 
     # I/O
     io_g = parser.add_argument_group('I/O Options')
-    io_g.add_argument('--encoding', default=D.encoding)
-    io_g.add_argument('--shard-size', type=int, default=None, metavar='N')
-    io_g.add_argument('--json-path', default='item', metavar='PATH')
+    io_g.add_argument('--encoding', default=D.encoding,
+                   help='Text encoding of input and output files.')
+    io_g.add_argument('--shard-size', type=int, default=None, metavar='N',
+                   help='Write the output in shards of N records (out.00000.jsonl, …).')
+    io_g.add_argument('--json-path', default='item', metavar='PATH',
+                   help='ijson path of the records inside a .json input (default: top-level array).')
     io_g.add_argument('--hf-cache', default=None, metavar='DIR',
                       help='Cache dir for hf:// dataset downloads '
                            '(default ~/.cache/llm-sanitizer-pro/datasets).')
 
     # Runtime
     rt = parser.add_argument_group('Runtime')
-    rt.add_argument('--log-level', default='INFO', choices=['DEBUG', 'INFO', 'WARNING', 'ERROR'])
+    rt.add_argument('--log-level', default='INFO', choices=['DEBUG', 'INFO', 'WARNING', 'ERROR'],
+                   help='Logging verbosity.')
     rt.add_argument('--log-format', default='text', choices=['text', 'json'],
                     help="Log line format on stderr: human text or JSON lines "
                          "(for structured ingestion). Default: text.")
-    rt.add_argument('--quiet', action='store_true')
-    rt.add_argument('--no-progress', action='store_true')
-    rt.add_argument('--jobs', type=int, default=1)
-    rt.add_argument('--chunk-size', type=int, default=64, metavar='N')
-    rt.add_argument('--dry-run', action='store_true')
-    rt.add_argument('--dry-run-size', type=int, default=10_000)
-    rt.add_argument('--stats-only', action='store_true')
-    rt.add_argument('--debug-records', action='store_true')
-    rt.add_argument('--stats-file', default=None, metavar='PATH')
+    rt.add_argument('--quiet', action='store_true',
+                   help='Only warnings and errors.')
+    rt.add_argument('--no-progress', action='store_true',
+                   help='Hide the progress bar.')
+    rt.add_argument('--jobs', type=int, default=1,
+                   help='Worker processes for the per-record stage (output identical to --jobs 1).')
+    rt.add_argument('--chunk-size', type=int, default=64, metavar='N',
+                   help='Records per task sent to a worker (record dispatch; JSONL input is read in 4 MB chunks).')
+    rt.add_argument('--dry-run', action='store_true',
+                   help='Process the first --dry-run-size records and write nothing.')
+    rt.add_argument('--dry-run-size', type=int, default=10_000,
+                   help='Records processed by --dry-run.')
+    rt.add_argument('--stats-only', action='store_true',
+                   help='Process everything but write no output (statistics only).')
+    rt.add_argument('--debug-records', action='store_true',
+                   help='Log why each record was dropped (sets --log-level DEBUG).')
+    rt.add_argument('--stats-file', default=None, metavar='PATH',
+                   help='Write run statistics (JSON) to PATH.')
+    rt.add_argument('--manifest', default=None, metavar='PATH',
+                    help='Write a run manifest (JSON): versions, models, full config and its '
+                         'hash, SHA-256 of every input and output file, per-stage counts.')
+    rt.add_argument('--manifest-no-digest', action='store_true',
+                    help='Skip the SHA-256 file digests in --manifest (sizes only).')
+    rt.add_argument('--dataset-card', default=None, metavar='PATH',
+                    help='Write a Hugging Face dataset card (README.md) describing the '
+                         'processing, rendered from the run manifest.')
     rt.add_argument('--report', default=None, metavar='PATH',
                     help='Write a self-contained HTML audit report (removal funnel, PII '
                          'counts by type, sample diffs) to PATH. Samples are redacted.')
@@ -836,7 +896,32 @@ def _write_artifacts(args: argparse.Namespace, config: SanitizerConfig, plan: IO
         logging.warning(f"Could not write audit report: {exc}")
 
 
+def _write_provenance(args: argparse.Namespace, config: SanitizerConfig, plan: IOPlan,
+                      sanitizer: Sanitizer, started_wall: float, outputs: List[str]) -> None:
+    if not (args.manifest or args.dataset_card):
+        return
+    from sanitizer_pro.manifest import build_manifest, write_manifest
+    try:
+        manifest = build_manifest(
+            config=config, stats=sanitizer.stats.to_dict(), inputs=plan.files, outputs=outputs,
+            started_at=started_wall, finished_at=time.time(),
+            transformer=sanitizer.transformer, jobs=args.jobs,
+            digest=not args.manifest_no_digest)
+        if args.manifest:
+            write_manifest(args.manifest, manifest)
+            logging.info(f"Run manifest written to {args.manifest}")
+        if args.dataset_card:
+            from sanitizer_pro.card import render_dataset_card
+            Path(args.dataset_card).write_text(render_dataset_card(manifest), encoding='utf-8')
+            logging.info(f"Dataset card written to {args.dataset_card}")
+    except Exception as exc:
+        logging.warning(f"Could not write provenance artifacts: {exc}")
+
+
 def main() -> None:
+    if len(sys.argv) > 1 and sys.argv[1] == 'diff':      # sanitize diff A B
+        from sanitizer_pro.diff import main as diff_main
+        sys.exit(diff_main(sys.argv[2:]))
     parser = build_parser()
     args = parser.parse_args()
     _print_info_and_exit(args, parser)
@@ -874,6 +959,7 @@ def main() -> None:
     logging.info(f"Start: {args.input} ({plan.input_fmt}) → {args.output} ({plan.output_fmt}) "
                  f"| jobs={args.jobs}")
     started = time.monotonic()
+    started_wall = time.time()
     try:
         if plan.is_hub_input:
             fmt = None
@@ -927,6 +1013,8 @@ def main() -> None:
 
     _print_summary(args, sanitizer.stats)
     _write_artifacts(args, config, plan, sanitizer, time.monotonic() - started)
+    _write_provenance(args, config, plan, sanitizer, started_wall,
+                      list(getattr(writer_ctx, 'paths', []) or []))
 
 
 if __name__ == "__main__":

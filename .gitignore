@@ -13,3 +13,4 @@ htmlcov/
 venv/
 *.dedup.db
 *.tmp
+site/
