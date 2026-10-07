@@ -17,7 +17,7 @@ FieldOps = Tuple[Dict[str, str], Set[str], Set[str], Set[str]]  # renames, drops
 
 DEDUP_BACKENDS = ('memory', 'sqlite')
 QUALITY_SCORERS = ('heuristic', 'perplexity', 'fineweb-edu', 'dclm', 'fasttext')
-NER_BACKENDS = ('auto', 'spacy', 'transformers')
+NER_BACKENDS = ('auto', 'spacy', 'transformers', 'gliner')
 
 
 @dataclass
@@ -33,6 +33,7 @@ class SanitizerConfig:
     pii_ner_backend: str = 'auto'
     pii_ner_entities: Tuple[str, ...] = ('person',)
     pii_ner_model: Optional[str] = None
+    pii_ner_threshold: float = 0.5        # GLiNER confidence threshold
     redact_secrets: bool = False
     extra_pii_patterns: Optional[List[PiiPattern]] = None
 
@@ -135,6 +136,7 @@ class SanitizerConfig:
                  f"quality_scorer must be one of {list(QUALITY_SCORERS)}.")
         _require(self.pii_ner_backend in NER_BACKENDS,
                  f"pii_ner_backend must be one of {list(NER_BACKENDS)}.")
+        _require(0 < self.pii_ner_threshold <= 1, "pii_ner_threshold must be in (0, 1].")
         _require(self.chat_max_tokens is None or self.chat_max_tokens >= 1,
                  "chat_max_tokens must be >= 1.")
         _require(not self.validate_chat or any(r.strip() for r in self.chat_roles),

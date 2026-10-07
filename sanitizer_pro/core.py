@@ -225,7 +225,8 @@ class RecordTransformer:
         if self.ner is None and config.pii_ner and config.remove_pii:
             from sanitizer_pro.ner import NERRedactor
             self.ner = NERRedactor(backend=config.pii_ner_backend,
-                                   entities=config.pii_ner_entities, model=config.pii_ner_model)
+                                   entities=config.pii_ner_entities, model=config.pii_ner_model,
+                                   threshold=config.pii_ner_threshold)
 
     def transform(self, record: Any, pseudo_registry: Optional[PseudoRegistry] = None,
                   pii_counters: Optional[Dict[str, int]] = None) -> Transformed:

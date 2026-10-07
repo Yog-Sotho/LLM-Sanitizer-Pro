@@ -47,6 +47,10 @@ all = [
 ner = [
     "spacy>=3.5.0",
 ]
+gliner = [
+    "gliner2>=1.0",
+    "peft",  # gliner2 imports it unconditionally
+]
 semantic = [
     "model2vec>=0.3.0",
 ]
@@ -74,7 +78,7 @@ include = ["sanitizer_pro*"]
 version = {attr = "sanitizer_pro.__version__"}  # single source of truth
 
 [tool.setuptools.package-data]
-sanitizer_pro = ["py.typed"]
+sanitizer_pro = ["py.typed", "data/*.jsonl"]
 
 [tool.ruff]
 line-length = 100
@@ -104,7 +108,7 @@ files = ["sanitizer_pro"]
 module = [
     "datasketch", "ijson", "langdetect", "model2vec", "numpy", "openpyxl", "pandas",
     "pyarrow", "pyarrow.*", "spacy", "torch", "tqdm", "transformers", "xlsxwriter", "yaml",
-    "fasttext", "huggingface_hub",
+    "fasttext", "huggingface_hub", "gliner2",
 ]
 ignore_missing_imports = true
 follow_imports = "skip"

@@ -158,7 +158,9 @@ _SSN_RE = re.compile(r'(?<![\d-])\d{3}-\d{2}-\d{4}(?![\d-])')
 # NANP needs separators: a bare 10-digit run is far more often an ID or a
 # Unix timestamp than a phone number.
 _PHONE_RE = re.compile(r'(?<![\d-])(?:\(\d{3}\)\s?|\d{3}[-.\s])\d{3}[-.\s]\d{4}(?![\d-])')
-_INTL_PHONE_RE = re.compile(r'\+\d{1,3}[\s\-]?\(?\d{1,4}\)?[\s\-]?\d{1,4}[\s\-]?\d{1,9}\b')
+# '+' country code, then up to six digit groups (French pairs, '+81 3-1234-5678',
+# '+1 (555) 123 4567'); the validator requires 8-15 digits in total (E.164).
+_INTL_PHONE_RE = re.compile(r'\+\d{1,3}(?:[ .\-]?\(?\d{1,4}\)?){1,6}\b')
 _IPV4_RE = re.compile(
     r'(?<![\d.])(?:(?:25[0-5]|2[0-4]\d|1\d{2}|[1-9]\d|\d)\.){3}'
     r'(?:25[0-5]|2[0-4]\d|1\d{2}|[1-9]\d|\d)(?!\d|\.\d)')
@@ -236,6 +238,9 @@ class PseudoRegistry:
         'card': 'card_{n:04d}', 'ssn': '000-00-{n:04d}', 'iban': 'IBAN_{n:04d}',
         'url': 'https://redacted-{n:04d}.local', 'custom': 'pii_{n:04d}',
         'person': 'Person_{n:04d}', 'location': 'Place_{n:04d}', 'org': 'Org_{n:04d}',
+        'address': 'Address_{n:04d}', 'date_of_birth': 'DOB_{n:04d}', 'id_number': 'ID_{n:04d}',
+        'financial': 'ACCT_{n:04d}', 'username': 'user_{n:04d}',
+        'credential': 'CREDENTIAL_{n:04d}',
     }
 
     def __init__(self) -> None:
@@ -327,6 +332,43 @@ def apply_patterns(
         if hits and counters is not None:
             counters[kind] = counters.get(kind, 0) + hits
     return text
+
+
+def find_spans(
+    text: str, patterns: List[Tuple[re.Pattern[str], str, str]],
+) -> List[Tuple[int, int, str]]:
+    """(start, end, kind) of everything apply_patterns() would redact, in
+    offsets of the original text. Patterns run in the same order; spans
+    claimed by an earlier pattern are blanked so later ones cannot re-match
+    them, mirroring sequential redaction."""
+    work = text
+    found: List[Tuple[int, int, str]] = []
+    for pattern, _token, kind in patterns:
+        validate = _VALIDATORS.get(pattern)
+        trim = _TRIMMERS.get(pattern)
+        claimed = []
+        for m in pattern.finditer(work):
+            if validate is not None and not validate(work, m):
+                continue
+            if 'secret' in pattern.groupindex and m.group('secret') is not None:
+                start, end = m.span('secret')
+            else:
+                start, end = m.span()
+            if trim is not None:
+                end = start + len(trim(work[start:end])[0])
+            if end > start:
+                claimed.append((start, end, kind))
+        for start, end, _ in claimed:
+            work = work[:start] + '\x00' * (end - start) + work[end:]
+        found.extend(claimed)
+    return sorted(found)
+
+
+def find_pii_spans(
+    text: str, extra_patterns: Optional[List[Tuple[re.Pattern[str], str, str]]] = None,
+) -> List[Tuple[int, int, str]]:
+    """Spans the regex PII redactor would redact (see find_spans)."""
+    return find_spans(text, _PII_PATTERNS + (extra_patterns or []))
 
 
 def redact_pii(

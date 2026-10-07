@@ -211,7 +211,11 @@ def build_parser() -> argparse.ArgumentParser:
                          'Requires spacy (+en_core_web_sm) or transformers.')
     fg.add_argument('--pii-ner-backend', default=D.pii_ner_backend, choices=list(NER_BACKENDS))
     fg.add_argument('--pii-ner-entities', default='person', metavar='KINDS',
-                    help='Comma-separated entity kinds to redact: person,location,org (default: person).')
+                    help='Comma-separated entity kinds to redact (default: person): person, '
+                         'location, org; with --pii-ner-backend gliner also address, '
+                         'date_of_birth, id_number, financial, username, credential; or all.')
+    fg.add_argument('--pii-ner-threshold', type=float, default=D.pii_ner_threshold,
+                    metavar='T', help='GLiNER confidence threshold (default 0.5).')
     fg.add_argument('--pii-ner-model', default=None, metavar='NAME',
                     help='Override the NER model (spaCy model name or HF model id).')
     fg.add_argument('--redact-secrets', action='store_true',
