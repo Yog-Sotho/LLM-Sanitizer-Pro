@@ -13,8 +13,16 @@ Production-grade, modular dataset sanitization, PII redaction, and curation pipe
 - **Profiles** (`--profile fine-tune|pretrain|rag`): one flag applies a curated bundle of defaults for a common job; your explicit flags and `--config` always win over the preset. `--profile list` shows what each sets.
 - **High-Performance Deduplication** (three tiers):
   - Exact SHA-256 dedup (in-memory or disk-backed SQLite for huge datasets).
-  - Fuzzy near-dedup via MinHash + LSH (`--fuzzy-dedup`, tunable `--fuzzy-threshold`).
-  - Semantic near-dedup (`--semantic-dedup`): static embeddings (model2vec, ~30MB, no torch) + hyperplane LSH catch paraphrases that share no n-grams, verified with exact cosine similarity (`--semantic-threshold`).
+  - Fuzzy near-dedup (`--fuzzy-dedup`, `--fuzzy-threshold`): MinHash over word 3-shingles.
+    - **Signatures:** computed by [rensa](https://pypi.org/project/rensa/) (Rust, `pip install "llm-sanitizer-pro[fuzzy]"`) or datasketch.
+    - **Matching:** LSH finds candidates and each one is verified against its stored signature.
+    - **Measured accuracy:** at thresholds 0.7–0.85, 97–98% of pairs at or above the threshold are caught, and no pair 0.15 or more below it.
+    - **Disk-backed index:** with `--dedup-backend sqlite` the index lives on disk. Memory stayed flat at about 140 MB from 100k to 500k records, while the in-memory index reached 1.1 GB at 500k.
+    - **Resume:** with `--dedup-db-path` the index survives `--resume`.
+  - Semantic near-dedup (`--semantic-dedup`): static embeddings (model2vec, ~30MB, no torch) catch paraphrases that share no n-grams (`--semantic-threshold`).
+    - **Index:** a usearch HNSW index (`--semantic-index`, part of the `[semantic]` extra) keeps lookups fast as the index grows.
+    - **Measured accuracy:** on 20k real embeddings it matched exact search on 99.9% of decisions, at ~3k rec/s.
+    - **Fallback:** without usearch, an LSH index is used. It slows down on large inputs.
 - **LLM-Native Formatting**: Direct export to ChatML (`--format-chatml`) and Alpaca/Instruct (`--format-instruct`) schemas, with automatic key mapping (`prompt`/`question`/`response`/`completion`/…). ShareGPT `conversations` (`{"from": "human", "value": …}`) are converted to OpenAI `messages`.
 - **Chat Dataset Validation** (`--validate-chat`): lint conversations before they reach a trainer — role alternation, empty turns, missing assistant replies, multiple/misplaced system messages, unknown roles, and per-conversation token budgets (`--chat-max-tokens`), with a per-reason rejection breakdown in the report and stats file. Understands OpenAI tool calling (function name and JSON `arguments` checked; tool results must answer an open `tool_call_id`, and every call must be answered), multimodal content parts (`[{"type": "text"}, {"type": "image_url"}]`), and ShareGPT records. With an HF `--tokenizer` that has a chat template, budgets count the rendered conversation (role markup and special tokens included) — what the trainer actually sees.
 - **Quality & Content Filtering**: Length/word/uniqueness/ASCII gates, all-caps rejection, code detection, profanity filtering, and pluggable Python quality scripts.
@@ -37,7 +45,11 @@ Production-grade, modular dataset sanitization, PII redaction, and curation pipe
 - **Dataset Splitting & Sharding**: `--split train=0.9,val=0.05,test=0.05` or fixed-size shards with `--shard-size`. Splits and `--sample` are decided by a hash of each record's content (salted by `--seed`), so a record always lands in the same split — across runs, resumes, and filter changes — and exact duplicates never straddle train and test.
 - **Crash-Safe I/O**: Atomic JSON writes (`.tmp` + `os.replace()`), safe HTML stripping via `html.parser`, structure-preserving text normalization (newlines kept for code/markdown data).
 - **Resumable Runs** (`--resume`): progress is checkpointed to `<output>.checkpoint.json` every `--checkpoint-interval` records; after a crash or Ctrl-C, rerun the same command and the pipeline skips already-processed input, restores statistics, pseudonym and sampling state, and appends to the output. Rows written after the last checkpoint by a hard crash (OOM-kill, SIGKILL) are truncated away and re-processed, so the result matches an uninterrupted run. Pair with `--dedup-backend sqlite --dedup-db-path` for dedup state that also survives the restart (rolled back to the checkpoint on resume).
-- **Parallel Processing**: `--jobs N` multiprocessing with accurate statistics.
+- **Parallel Processing** (`--jobs N`): output, statistics, pseudonyms and report samples are identical to a single-process run.
+  - **JSONL input:** workers read and parse byte-range chunks of the files themselves.
+  - **Measured speed:** 100k records with PII + secrets redaction and dedup ran at 20.6k rec/s with 4 jobs, against 6.3k rec/s for one process.
+  - **Pseudonyms:** with `--pii-pseudonymize`, set `SANITIZE_PSEUDO_KEY` (or `--pseudo-key`) for keyed pseudonyms. The same value gets the same pseudonym in every worker and every run that uses the key.
+- **Many Input Files**: `--input` takes a directory (searched recursively) or a glob (`'data/**/*.jsonl'`). Files are read in sorted order, may mix formats, and work with `--resume`.
 - **Audit Report** (`--report audit.html`): a self-contained HTML artifact per run — removal funnel, PII redaction counts by type, quality-score distribution, chat-failure breakdown, and before/after redaction samples. Light/dark aware, no external assets; archive it next to the dataset or attach it to a compliance ticket. Also available from the Python API via `s.write_report(path)`.
 
 ## 📦 Installation
@@ -59,6 +71,10 @@ sanitize --input data.jsonl --output chatml.jsonl --fuzzy-dedup --fuzzy-threshol
 # Parallel processing + SQLite dedup backend for datasets bigger than RAM
 sanitize --input huge.jsonl --output clean.jsonl --jobs 8 --deduplicate --dedup-backend sqlite
 
+# A whole directory of shards, near-dedup on disk, 8 workers
+sanitize --input 'shards/**/*.jsonl' --output clean.jsonl --jobs 8 \
+    --fuzzy-dedup --dedup-backend sqlite --dedup-db-path minhash.db
+
 # Train/val/test split with reproducible sampling
 sanitize --input data.jsonl --output out.jsonl --split train=0.9,val=0.05,test=0.05 --seed 42
 
@@ -77,9 +93,10 @@ sanitize --decontaminate list
 # NER-backed PII: redact person names too (see install note below)
 sanitize --input data.jsonl --output clean.jsonl --remove-pii --pii-ner
 
-# Pseudonymize everything consistently (names, emails, …) and keep the mapping
-sanitize --input data.jsonl --output clean.jsonl --remove-pii --pii-ner \
-    --pii-pseudonymize --pseudo-map-file mapping.json
+# Pseudonymize everything consistently (names, emails, …) and keep the mapping.
+# With a key, pseudonyms are the same across runs and --jobs workers.
+SANITIZE_PSEUDO_KEY=… sanitize --input data.jsonl --output clean.jsonl --remove-pii --pii-ner \
+    --pii-pseudonymize --pseudo-map-file mapping.json --jobs 4
 
 # Convert instruction data to ChatML, then reject structurally invalid conversations
 sanitize --input data.jsonl --output chat.jsonl --format-chatml --validate-chat
@@ -195,7 +212,13 @@ combines both). Export pseudonym mappings with `s.export_pseudonym_map(path)`.
 ```bash
 pip install -e .[dev]
 pytest            # run the test suite
-ruff check sanitizer_pro tests
+ruff check sanitizer_pro tests benchmarks scripts
+mypy              # strict
+
+# Throughput (rec/s, MB/s, peak RSS per scenario, --jobs scaling); nightly in CI
+python -m benchmarks.bench --records 100000
+python -m benchmarks.fuzzy_recall --threshold 0.85     # fuzzy dedup vs exact Jaccard
+python -m benchmarks.semantic_recall --size 100000     # semantic index vs exact search
 ```
 ---
 ## License

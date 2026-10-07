@@ -47,7 +47,7 @@ SCENARIOS: List[Scenario] = [
     Scenario("rules", ["--quality-rules", "all"]),
 ]
 JOBS_FLAGS = ["--remove-pii", "--redact-secrets", "--deduplicate"]
-SCALING_TARGET = 0.6   # throughput at N jobs >= 0.6 * N * single-job throughput
+SCALING_TARGET = 0.5   # throughput at N jobs >= 0.5 * N * single-job (startup weighs on CI-sized runs)
 
 
 def _available(modules: Sequence[str]) -> bool:
