@@ -80,6 +80,63 @@ class TestSanitizerAudit:
         assert out.exists() and 'Sanitization Audit Report' in out.read_text()
 
 
+class TestReportPrivacy:
+    LEAKY = {"text": "mail jane@example.org key AKIAABCDEFGHIJKLMNOP"}
+
+    def test_dropped_samples_are_redacted(self):
+        cfg = relaxed(remove_pii=True, redact_secrets=True, min_words=50)  # everything drops
+        with Sanitizer(cfg) as s:
+            s.process_record(self.LEAKY)
+            html = s.report_html()
+        assert s.audit_samples.dropped['quality']
+        assert 'jane@example.org' not in html and 'AKIAABCDEFGHIJKLMNOP' not in html
+        assert '[PII_EMAIL]' in html and '[SECRET_AWS_KEY]' in html
+
+    def test_pii_diff_masks_originals(self):
+        with Sanitizer(relaxed(remove_pii=True, redact_secrets=True)) as s:
+            s.process_record({"text": "write to jane@example.org about " + GOOD})
+            html = s.report_html()
+        (before, after), = s.audit_samples.pii_diffs
+        assert 'jane@example.org' not in before and 'jane@example.org' not in html
+        assert '\u2022' in before and '[PII_EMAIL]' in after
+        assert 'write to' in before            # unchanged context is kept
+
+    def test_masked_mode_does_not_leak_through_dropped_samples(self):
+        # --pii-mask keeps partial values in the *output*; dropped samples use
+        # full tokens so nothing partial leaks into the report.
+        cfg = relaxed(remove_pii=True, pii_mask=True, min_words=50)
+        with Sanitizer(cfg) as s:
+            s.process_record({"text": "call 555-123-4567 now"})
+        assert '4567' not in s.audit_samples.dropped['quality'][0]
+
+    def test_pseudonym_map_untouched_by_report_redaction(self):
+        cfg = relaxed(remove_pii=True, pii_pseudonymize=True, min_words=50)
+        with Sanitizer(cfg) as s:
+            s.process_record({"text": "mail jane@example.org"})
+            assert list(s.pseudo_registry.to_dict()) == ['jane@example.org']
+
+    def test_raw_opt_in(self):
+        cfg = relaxed(remove_pii=True, redact_secrets=True, min_words=50,
+                      report_raw_samples=True)
+        with Sanitizer(cfg) as s:
+            s.process_record(self.LEAKY)
+            assert 'jane@example.org' in s.report_html()
+
+    def test_no_redaction_configured_keeps_data_as_is(self):
+        with Sanitizer(relaxed(min_words=50)) as s:
+            s.process_record({"text": "plain sample"})
+        assert 'plain sample' in s.audit_samples.dropped['quality'][0]
+
+
+def test_mask_removed_only_keeps_text_present_after():
+    from sanitizer_pro.report import _mask_removed
+    before = '{"t": "id 4111111111111111 for bob@x.io"}'
+    after = '{"t": "id [PII_CARD] for [PII_EMAIL]"}'
+    masked = _mask_removed(before, after)
+    assert '4111' not in masked and 'bob@x.io' not in masked
+    assert masked.startswith('{"t": "id ') and ' for ' in masked
+
+
 def test_generate_report_empty_stats():
     html = generate_report_html({'total': 0, 'kept': 0, 'kept_pct': 0})
     assert 'Records processed' in html

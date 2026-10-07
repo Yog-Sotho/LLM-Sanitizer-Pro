@@ -283,16 +283,19 @@ def test_invalid_score_flags(tmp_path):
     assert r.returncode == 1
 
 
+REPORT_RECORDS = [
+    {"text": "Contact john@example.com about the quarterly report published this month."},
+    {"text": "Contact john@example.com about the quarterly report published this month."},
+    {"text": "jane@example.org AKIAABCDEFGHIJKLMNOP"},   # dropped by the quality gates
+]
+
+
 def test_html_report_end_to_end(tmp_path):
     inp, out = tmp_path / "in.jsonl", tmp_path / "out.jsonl"
     report = tmp_path / "audit.html"
-    write_jsonl(inp, [
-        {"text": "Contact john@example.com about the quarterly report published this month."},
-        {"text": "Contact john@example.com about the quarterly report published this month."},
-        {"text": "short"},
-    ])
+    write_jsonl(inp, REPORT_RECORDS)
     r = run_cli('--input', str(inp), '--output', str(out),
-                '--remove-pii', '--deduplicate', '--report', str(report),
+                '--remove-pii', '--redact-secrets', '--deduplicate', '--report', str(report),
                 '--min-chars', '20', '--min-words', '5', '--no-progress', '--quiet')
     assert r.returncode == 0, r.stderr
     html = report.read_text()
@@ -300,7 +303,24 @@ def test_html_report_end_to_end(tmp_path):
     assert 'Email addresses' in html          # PII counts by type
     assert 'Deduplication' in html            # removal funnel
     assert 'PII redaction samples' in html    # before/after diffs
-    assert 'john@example.com' in html         # the 'before' sample shows the original
+    # Neither the diff samples nor the dropped-record samples leak originals.
+    for secret in ('john@example.com', 'jane@example.org', 'AKIAABCDEFGHIJKLMNOP'):
+        assert secret not in html
+    assert '[PII_EMAIL]' in html and '[SECRET_AWS_KEY]' in html
+
+
+def test_html_report_raw_samples_opt_in(tmp_path):
+    inp, out = tmp_path / "in.jsonl", tmp_path / "out.jsonl"
+    report = tmp_path / "audit.html"
+    write_jsonl(inp, REPORT_RECORDS)
+    r = run_cli('--input', str(inp), '--output', str(out),
+                '--remove-pii', '--redact-secrets', '--report', str(report),
+                '--report-raw-samples',
+                '--min-chars', '20', '--min-words', '5', '--no-progress')
+    assert r.returncode == 0, r.stderr
+    assert 'unredacted' in r.stderr           # loud warning
+    html = report.read_text()
+    assert 'john@example.com' in html and 'jane@example.org' in html
 
 
 def test_html_report_with_parallel_jobs(tmp_path):

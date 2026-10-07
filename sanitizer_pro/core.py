@@ -72,6 +72,29 @@ def _sanitize_value(
     if isinstance(v, list): return [_sanitize_value(item, **kw) for item in v]
     return v
 
+def make_report_redactor(
+    remove_pii: bool, redact_secrets: bool, extra_pii: Optional[List] = None,
+    ner_redactor: Optional[Any] = None, max_depth: int = _MAX_DEPTH_DEFAULT,
+) -> Optional[Callable[[Any], Any]]:
+    """Redactor for audit-report samples of dropped records.
+
+    Uses plain token replacement (no masking, no pseudonym registry) so it
+    neither leaks partial values nor mutates the run's pseudonym map. Returns
+    None when the run redacts nothing (samples then mirror the data as-is)."""
+    if not (remove_pii or redact_secrets):
+        return None
+
+    def _redact(record: Any) -> Any:
+        return _sanitize_value(
+            record, remove_html=False, remove_pii=remove_pii, pii_mask=False,
+            extra_pii=extra_pii, pseudo_registry=None, field_pii_only=True,
+            field_no_clean=False, max_depth=max_depth, truncator=None,
+            ner_redactor=ner_redactor if remove_pii else None, pii_counters=None,
+            redact_secrets=redact_secrets)
+
+    return _redact
+
+
 def sanitize_record(
     record: Any, args: argparse.Namespace, text_fields: Optional[List[str]] = None,
     extra_pii_patterns: Optional[List] = None, lang_filter: Optional[Set[str]] = None,

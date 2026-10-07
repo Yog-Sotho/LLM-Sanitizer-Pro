@@ -4,10 +4,11 @@ Turns the run's statistics, PII redaction counts, and collected samples into a
 single HTML file with no external assets — suitable for archiving next to the
 output dataset, attaching to a compliance ticket, or rendering in a SaaS UI.
 """
+import difflib
 import html
 import json
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 _MAX_SAMPLES_PER_REASON = 5
 _SAMPLE_TRUNCATE = 400
@@ -39,31 +40,76 @@ _PII_LABELS = {
 }
 
 
-class AuditSampleCollector:
-    """Bounded reservoirs of example records for the audit report."""
+_MASK_CHAR = '\u2022'
 
-    def __init__(self, max_per_reason: int = _MAX_SAMPLES_PER_REASON) -> None:
+
+def _mask_removed(before: str, after: str) -> str:
+    """Render `before` with every span that redaction changed replaced by mask
+    characters, so the report shows *where* PII was removed but never the
+    removed value. Unchanged spans are, by construction, present in `after`."""
+    sm = difflib.SequenceMatcher(None, before, after, autojunk=False)
+    out: List[str] = []
+    for op, i1, i2, _j1, _j2 in sm.get_opcodes():
+        if op == 'equal':
+            out.append(before[i1:i2])
+        elif i2 > i1:  # 'replace' / 'delete': the original (sensitive) text
+            out.append(_MASK_CHAR * min(i2 - i1, 8))
+    return ''.join(out)
+
+
+class AuditSampleCollector:
+    """Bounded reservoirs of example records for the audit report.
+
+    Privacy: by default nothing that redaction removed reaches the report.
+    Dropped records are passed through `redact` (when given) before they are
+    stored, and PII diffs keep the redacted "after" text plus a "before" view
+    whose changed spans are masked. `raw=True` restores verbatim originals —
+    only for reports that are handled like the raw data itself.
+    """
+
+    def __init__(self, max_per_reason: int = _MAX_SAMPLES_PER_REASON, raw: bool = False,
+                 redact: Optional[Callable[[Any], Any]] = None) -> None:
         self.max_per_reason = max_per_reason
+        self.raw = raw
+        self.redact = redact
         self.dropped: Dict[str, List[str]] = {}
         self.pii_diffs: List[Tuple[str, str]] = []
 
     @staticmethod
-    def _snippet(record: Any) -> str:
+    def _dumps(record: Any) -> str:
         try:
-            s = json.dumps(record, ensure_ascii=False, default=str)
+            return json.dumps(record, ensure_ascii=False, default=str)
         except Exception:
-            s = repr(record)
+            return repr(record)
+
+    @staticmethod
+    def _truncate(s: str) -> str:
         return s[:_SAMPLE_TRUNCATE] + ('…' if len(s) > _SAMPLE_TRUNCATE else '')
 
-    def add_dropped(self, reason: str, record: Any) -> None:
+    @classmethod
+    def _snippet(cls, record: Any) -> str:
+        return cls._truncate(cls._dumps(record))
+
+    def add_dropped(self, reason: str, record: Any, redacted: bool = False) -> None:
+        """Store a sample of a removed record. Pass `redacted=True` when the
+        record has already been through PII/secrets redaction."""
         bucket = self.dropped.setdefault(reason, [])
-        if len(bucket) < self.max_per_reason:
-            bucket.append(self._snippet(record))
+        if len(bucket) >= self.max_per_reason:
+            return
+        if not redacted and not self.raw and self.redact is not None:
+            try:
+                record = self.redact(record)
+            except Exception:
+                return  # never fall back to the unredacted record
+        bucket.append(self._snippet(record))
 
     def add_pii_diff(self, before: Any, after: Any) -> None:
         if len(self.pii_diffs) >= self.max_per_reason:
             return
-        pair = (self._snippet(before), self._snippet(after))
+        b, a = self._dumps(before), self._dumps(after)
+        if not self.raw:
+            b = _mask_removed(b, a)
+        pair = (self._truncate(b), self._truncate(a))
         if pair not in self.pii_diffs:  # duplicates are redacted before dedup drops them
             self.pii_diffs.append(pair)
 
@@ -174,8 +220,11 @@ def generate_report_html(
             f'<code>{_e(b)}</code></div><div class="after"><span class="dtag">after</span>'
             f'<code>{_e(a)}</code></div></div>'
             for b, a in samples.pii_diffs)
+        note = ('Originals are shown verbatim (raw samples enabled).' if samples.raw else
+                'Removed values are masked (\u2022); only their position is shown.')
         sections.append(f"""
-        <section><h2>PII redaction samples</h2>{diffs}</section>""")
+        <section><h2>PII redaction samples</h2>{diffs}
+        <p class="note">{_e(note)}</p></section>""")
 
     if samples is not None and samples.dropped:
         blocks = []

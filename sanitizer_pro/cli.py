@@ -39,7 +39,7 @@ from sanitizer_pro.config import (
     load_config_file, collect_explicit_args, apply_config_to_args,
     load_custom_pii_patterns, load_field_config, build_field_ops, load_quality_script
 )
-from sanitizer_pro.core import sanitize_record, TokenTruncator, get_record_hash
+from sanitizer_pro.core import sanitize_record, TokenTruncator, get_record_hash, make_report_redactor
 from sanitizer_pro.dedup import make_deduper
 from sanitizer_pro.pii import PseudoRegistry
 from sanitizer_pro.io.readers import read_records
@@ -279,7 +279,10 @@ def build_parser() -> argparse.ArgumentParser:
     rt.add_argument('--stats-file', default=None, metavar='PATH')
     rt.add_argument('--report', default=None, metavar='PATH',
                     help='Write a self-contained HTML audit report (removal funnel, PII '
-                         'counts by type, sample diffs) to PATH.')
+                         'counts by type, sample diffs) to PATH. Samples are redacted.')
+    rt.add_argument('--report-raw-samples', action='store_true',
+                    help='Include verbatim (unredacted) record samples in --report. The report '
+                         'then contains raw PII/secrets; handle it like the input data.')
     rt.add_argument('--resume', action='store_true',
                     help='Checkpoint progress to <output>.checkpoint.json and, when a '
                          'checkpoint exists, continue the run from where it stopped '
@@ -604,7 +607,14 @@ def main() -> None:
     audit_samples = None
     if args.report:
         from sanitizer_pro.report import AuditSampleCollector
-        audit_samples = AuditSampleCollector()
+        if args.report_raw_samples:
+            logging.warning("--report-raw-samples: the audit report will contain unredacted "
+                            "records (PII/secrets). Handle it like the raw input data.")
+        audit_samples = AuditSampleCollector(
+            raw=args.report_raw_samples,
+            redact=make_report_redactor(
+                args.remove_pii, args.redact_secrets, extra_pii=extra_pii,
+                ner_redactor=ner_redactor, max_depth=args.max_depth))
 
     # (score, sanitized, quality_text, lang) survivors awaiting top-P% selection
     topk_buffer: Optional[List[Tuple[Optional[float], Dict[str, Any], str, Optional[str]]]] = \
@@ -629,13 +639,13 @@ def main() -> None:
                     run_stats.chat_invalid_reasons.get(chat_reason, 0) + 1
                 logging.debug(f"Chat validation rejected record: {chat_reason}")
                 if audit_samples is not None:
-                    audit_samples.add_dropped('chat', sanitized)
+                    audit_samples.add_dropped('chat', sanitized, redacted=True)
                 return
 
         if contamination_index is not None and contamination_index.is_contaminated(quality_text):
             run_stats.filtered_contaminated += 1
             if audit_samples is not None:
-                audit_samples.add_dropped('contaminated', sanitized)
+                audit_samples.add_dropped('contaminated', sanitized, redacted=True)
             return
 
         score: Optional[float] = None
@@ -644,7 +654,7 @@ def main() -> None:
             if args.quality_min_score is not None and score < args.quality_min_score:
                 run_stats.filtered_low_score += 1
                 if audit_samples is not None:
-                    audit_samples.add_dropped('low_score', sanitized)
+                    audit_samples.add_dropped('low_score', sanitized, redacted=True)
                 return
 
         if args.sample is not None and random.random() >= args.sample:
