@@ -256,17 +256,22 @@ def build_parser() -> argparse.ArgumentParser:
     # Chat validation
     cg = parser.add_argument_group('Chat Dataset Validation')
     cg.add_argument('--validate-chat', action='store_true',
-                    help='Reject records whose "messages" structure is invalid for chat '
-                         'fine-tuning (role alternation, empty turns, no assistant reply, …). '
-                         'Combine with --format-chatml to convert first, then validate.')
+                    help='Reject records whose conversation is invalid for chat fine-tuning '
+                         '(role alternation, empty turns, no assistant reply, malformed tool '
+                         'calls, unanswered or orphan tool results, …). Reads OpenAI '
+                         '"messages" (incl. content parts and tool_calls) and ShareGPT '
+                         '"conversations". Combine with --format-chatml to convert first.')
     cg.add_argument('--chat-lenient', action='store_true',
-                    help='Only structural checks (schema, known roles, non-empty content, '
-                         'assistant present); skip ordering/alternation rules.')
+                    help='Only structural and tool-call checks (schema, known roles, '
+                         'non-empty content, assistant present, tool links); skip '
+                         'ordering/alternation rules.')
     cg.add_argument('--chat-max-tokens', type=int, default=None, metavar='N',
-                    help='Reject conversations whose total content exceeds N tokens '
-                         '(counted with --tokenizer).')
+                    help='Reject conversations longer than N tokens, counted with '
+                         "--tokenizer through its chat template when it has one (role "
+                         'markup included), else over message contents.')
     cg.add_argument('--chat-roles', default='system,user,assistant', metavar='ROLES',
-                    help='Comma-separated allowed roles (default: system,user,assistant).')
+                    help='Comma-separated allowed roles (default: system,user,assistant; '
+                         'add tool for tool-use data).')
 
     # CSV / Excel
     iog = parser.add_argument_group('CSV / Excel Options')

@@ -15,8 +15,8 @@ Production-grade, modular dataset sanitization, PII redaction, and curation pipe
   - Exact SHA-256 dedup (in-memory or disk-backed SQLite for huge datasets).
   - Fuzzy near-dedup via MinHash + LSH (`--fuzzy-dedup`, tunable `--fuzzy-threshold`).
   - Semantic near-dedup (`--semantic-dedup`): static embeddings (model2vec, ~30MB, no torch) + hyperplane LSH catch paraphrases that share no n-grams, verified with exact cosine similarity (`--semantic-threshold`).
-- **LLM-Native Formatting**: Direct export to ChatML (`--format-chatml`) and Alpaca/Instruct (`--format-instruct`) schemas, with automatic key mapping (`prompt`/`question`/`response`/`completion`/…).
-- **Chat Dataset Validation** (`--validate-chat`): lint `messages`-format records before they reach a trainer — role alternation, empty turns, missing assistant replies, multiple/misplaced system messages, unknown roles, and per-conversation token budgets (`--chat-max-tokens`), with a per-reason rejection breakdown in the report and stats file.
+- **LLM-Native Formatting**: Direct export to ChatML (`--format-chatml`) and Alpaca/Instruct (`--format-instruct`) schemas, with automatic key mapping (`prompt`/`question`/`response`/`completion`/…). ShareGPT `conversations` (`{"from": "human", "value": …}`) are converted to OpenAI `messages`.
+- **Chat Dataset Validation** (`--validate-chat`): lint conversations before they reach a trainer — role alternation, empty turns, missing assistant replies, multiple/misplaced system messages, unknown roles, and per-conversation token budgets (`--chat-max-tokens`), with a per-reason rejection breakdown in the report and stats file. Understands OpenAI tool calling (function name and JSON `arguments` checked; tool results must answer an open `tool_call_id`, and every call must be answered), multimodal content parts (`[{"type": "text"}, {"type": "image_url"}]`), and ShareGPT records. With an HF `--tokenizer` that has a chat template, budgets count the rendered conversation (role markup and special tokens included) — what the trainer actually sees.
 - **Quality & Content Filtering**: Length/word/uniqueness/ASCII gates, all-caps rejection, code detection, profanity filtering, and pluggable Python quality scripts.
 - **Language Filtering** (`--lang-filter en,zh`): GlotLID v3 (fastText, 2,000+ language varieties, the identifier used by FineWeb-2) by default when installed (`pip install "llm-sanitizer-pro[lang]"`; the 1.7 GB model downloads once), OpenLID-v2 (`--lang-backend openlid`, GPL-3.0, downloaded on demand), or langdetect. Filters accept ISO 639-1 or 639-3 codes — `zh` matches `cmn_Hani`/`yue_Hani`, `ar` matches Arabic dialects — with `--lang-confidence` gating. Each `--jobs` worker loads its own model copy (~1.7 GB RAM for GlotLID).
 - **Quality Scoring** (`--quality-min-score`, `--keep-top-percent`, `--quality-score-field`): every record gets a [0, 1] quality score from one of five backends:
@@ -84,10 +84,17 @@ sanitize --input data.jsonl --output clean.jsonl --remove-pii --pii-ner \
 # Convert instruction data to ChatML, then reject structurally invalid conversations
 sanitize --input data.jsonl --output chat.jsonl --format-chatml --validate-chat
 
-# Enforce a context-window budget per conversation (tokens counted with --tokenizer)
-sanitize --input chat.jsonl --output fit.jsonl --validate-chat --chat-max-tokens 4096
+# Enforce a context-window budget per conversation, counted through the
+# model's chat template
+sanitize --input chat.jsonl --output fit.jsonl --validate-chat --chat-max-tokens 4096 \
+    --tokenizer Qwen/Qwen3-8B
 
-# Multi-agent / tool traces: keep structural checks, relax ordering rules
+# Tool-calling data (OpenAI tool_calls / tool results, or ShareGPT
+# function_call / observation turns)
+sanitize --input tools.jsonl --output clean.jsonl --validate-chat \
+    --chat-roles system,user,assistant,tool
+
+# Multi-agent traces: keep structural and tool-call checks, relax ordering rules
 sanitize --input traces.jsonl --output clean.jsonl --validate-chat --chat-lenient \
     --chat-roles system,user,assistant,tool
 

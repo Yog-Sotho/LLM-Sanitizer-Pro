@@ -5,6 +5,7 @@ import json
 import re
 from typing import Any, Callable, Dict, List, NamedTuple, Optional, Set
 
+from sanitizer_pro.chat import conversation_of
 from sanitizer_pro.langid import LanguageIdentifier, make_language_identifier, normalize_filter
 from sanitizer_pro.langid import matches as lang_matches
 from sanitizer_pro.rules import check_rules
@@ -243,8 +244,9 @@ class RecordTransformer:
 
 
 def format_chatml(record: Dict[str, Any]) -> Dict[str, Any]:
-    if isinstance(record.get("messages"), list):
-        return {"messages": record["messages"]}  # already conversational
+    conversation = conversation_of(record)  # OpenAI messages, or ShareGPT converted
+    if isinstance(conversation, list):
+        return {"messages": conversation}  # already conversational
     messages = []
     if record.get("system"): messages.append({"role": "system", "content": str(record["system"])})
     user_content = str(record.get("instruction") or record.get("prompt") or record.get("question") or "")

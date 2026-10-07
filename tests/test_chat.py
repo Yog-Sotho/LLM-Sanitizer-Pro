@@ -113,3 +113,209 @@ class TestTokenBudget:
 def test_whitespace_token_counter():
     counter = make_token_counter('whitespace')
     assert counter("one two three") == 3
+
+
+TOOLS = ('system', 'user', 'assistant', 'tool')
+
+
+def call(call_id, name="get_weather", arguments='{"city": "Paris"}'):
+    return {"id": call_id, "type": "function", "function": {"name": name, "arguments": arguments}}
+
+
+def tool_conversation(*extra):
+    return {"messages": [
+        {"role": "user", "content": "Weather in Paris and Rome?"},
+        {"role": "assistant", "content": None,
+         "tool_calls": [call("c1"), call("c2", arguments='{"city": "Rome"}')]},
+        {"role": "tool", "tool_call_id": "c1", "content": "18C sunny"},
+        {"role": "tool", "tool_call_id": "c2", "content": "24C cloudy"},
+        {"role": "assistant", "content": "Paris is 18C and sunny; Rome 24C and cloudy."},
+        *extra,
+    ]}
+
+
+class TestToolCalling:
+    def test_valid_tool_round_trip(self):
+        assert ChatValidator(allowed_roles=TOOLS).check(tool_conversation()) is None
+
+    def test_multi_turn_after_tools(self):
+        rec = tool_conversation({"role": "user", "content": "Thanks"},
+                                {"role": "assistant", "content": "Anytime."})
+        assert ChatValidator(allowed_roles=TOOLS).check(rec) is None
+
+    def test_chained_tool_calls_in_one_turn(self):
+        rec = {"messages": [
+            {"role": "user", "content": "q"},
+            {"role": "assistant", "content": "", "tool_calls": [call("a")]},
+            {"role": "tool", "tool_call_id": "a", "content": "r1"},
+            {"role": "assistant", "content": "One more lookup.", "tool_calls": [call("b")]},
+            {"role": "tool", "tool_call_id": "b", "content": "r2"},
+            {"role": "assistant", "content": "done"},
+        ]}
+        assert ChatValidator(allowed_roles=TOOLS).check(rec) is None
+
+    def test_dict_arguments_accepted(self):
+        rec = tool_conversation()
+        rec["messages"][1]["tool_calls"][0]["function"]["arguments"] = {"city": "Paris"}
+        assert ChatValidator(allowed_roles=TOOLS).check(rec) is None
+
+    def test_arguments_must_be_json(self):
+        rec = tool_conversation()
+        rec["messages"][1]["tool_calls"][0]["function"]["arguments"] = "{city: Paris"
+        assert ChatValidator(allowed_roles=TOOLS).check(rec) == chat.TOOL_ARGS_NOT_JSON
+
+    def test_call_needs_function_name(self):
+        rec = tool_conversation()
+        rec["messages"][1]["tool_calls"][0]["function"]["name"] = " "
+        assert ChatValidator(allowed_roles=TOOLS).check(rec) == chat.BAD_TOOL_CALL
+
+    def test_orphan_tool_result(self):
+        rec = tool_conversation()
+        rec["messages"][3]["tool_call_id"] = "nope"
+        v = ChatValidator(allowed_roles=TOOLS, lenient=True)
+        assert v.check(rec) == chat.ORPHAN_TOOL_RESULT
+
+    def test_unanswered_call(self):
+        rec = tool_conversation()
+        del rec["messages"][3]
+        assert ChatValidator(allowed_roles=TOOLS).check(rec) == chat.UNANSWERED_TOOL_CALL
+
+    def test_unanswered_call_before_user_turn(self):
+        rec = {"messages": [
+            {"role": "user", "content": "q"},
+            {"role": "assistant", "content": None, "tool_calls": [call("a")]},
+            {"role": "user", "content": "hello?"},
+            {"role": "assistant", "content": "sorry"},
+        ]}
+        assert ChatValidator(allowed_roles=TOOLS, lenient=True).check(rec) == \
+            chat.UNANSWERED_TOOL_CALL
+
+    def test_results_without_ids_match_in_order(self):
+        rec = tool_conversation()
+        for m in rec["messages"]:
+            m.pop("tool_call_id", None)
+        assert ChatValidator(allowed_roles=TOOLS).check(rec) is None
+
+    def test_conversation_cannot_end_on_tool_call(self):
+        rec = {"messages": [
+            {"role": "user", "content": "q"},
+            {"role": "assistant", "content": None, "tool_calls": [call("a")]},
+            {"role": "tool", "tool_call_id": "a", "content": "r"},
+        ]}
+        assert ChatValidator(allowed_roles=TOOLS).check(rec) == chat.LAST_NOT_ASSISTANT
+
+    def test_tool_result_cannot_follow_user(self):
+        rec = {"messages": [
+            {"role": "user", "content": "q"},
+            {"role": "assistant", "content": None, "tool_calls": [call("a")]},
+            {"role": "tool", "tool_call_id": "a", "content": "r"},
+            {"role": "assistant", "content": "x"},
+            {"role": "user", "content": "q2"},
+            {"role": "tool", "tool_call_id": "a", "content": "r"},
+            {"role": "assistant", "content": "y"},
+        ]}
+        assert ChatValidator(allowed_roles=TOOLS).check(rec) == chat.ORPHAN_TOOL_RESULT
+
+    def test_empty_tool_output_allowed(self):
+        rec = tool_conversation()
+        rec["messages"][2]["content"] = ""
+        assert ChatValidator(allowed_roles=TOOLS).check(rec) is None
+
+    def test_tool_call_arguments_count_toward_budget(self):
+        rec = tool_conversation()
+        words = sum(len(str(m.get("content") or "").split()) for m in rec["messages"])
+        assert ChatValidator(allowed_roles=TOOLS, max_tokens=words).check(rec) == \
+            chat.TOO_MANY_TOKENS
+
+
+class TestContentParts:
+    def test_text_parts(self):
+        rec = {"messages": [
+            {"role": "user", "content": [{"type": "text", "text": "Describe"},
+                                         {"type": "image_url", "image_url": {"url": "x.png"}}]},
+            {"role": "assistant", "content": [{"type": "text", "text": "A cat."}]},
+        ]}
+        assert ChatValidator().check(rec) is None
+
+    def test_image_only_user_turn_is_content(self):
+        rec = {"messages": [
+            {"role": "user", "content": [{"type": "image_url", "image_url": {"url": "x.png"}}]},
+            {"role": "assistant", "content": "A cat."},
+        ]}
+        assert ChatValidator().check(rec) is None
+
+    def test_empty_text_parts_rejected(self):
+        rec = {"messages": [{"role": "user", "content": [{"type": "text", "text": " "}]},
+                            {"role": "assistant", "content": "a"}]}
+        assert ChatValidator().check(rec) == chat.EMPTY_CONTENT
+
+    def test_malformed_parts_rejected(self):
+        for content in ([{"text": "no type"}], [{"type": "text", "text": 3}], ["raw"], 42):
+            rec = {"messages": [{"role": "user", "content": content},
+                                {"role": "assistant", "content": "a"}]}
+            assert ChatValidator().check(rec) == chat.BAD_MESSAGE_SCHEMA, content
+
+
+class TestShareGPT:
+    CONV = {"conversations": [{"from": "system", "value": "Be brief."},
+                              {"from": "human", "value": "Hi"},
+                              {"from": "gpt", "value": "Hello!"}]}
+
+    def test_converts_roles(self):
+        assert chat.sharegpt_to_messages(self.CONV["conversations"]) == [
+            {"role": "system", "content": "Be brief."},
+            {"role": "user", "content": "Hi"},
+            {"role": "assistant", "content": "Hello!"}]
+
+    def test_validates_conversations_field(self):
+        assert ChatValidator().check(self.CONV) is None
+
+    def test_validates_sharegpt_items_under_messages(self):
+        assert ChatValidator().check({"messages": self.CONV["conversations"]}) is None
+
+    def test_invalid_sharegpt_order(self):
+        rec = {"conversations": [{"from": "gpt", "value": "a"}, {"from": "human", "value": "q"}]}
+        assert ChatValidator().check(rec) == chat.FIRST_NOT_USER
+
+    def test_function_call_observation_turns(self):
+        rec = {"conversations": [{"from": "human", "value": "weather?"},
+                                 {"from": "function_call", "value": '{"name": "w"}'},
+                                 {"from": "observation", "value": "sunny"},
+                                 {"from": "gpt", "value": "It is sunny."}]}
+        assert ChatValidator(allowed_roles=TOOLS).check(rec) is None
+
+    def test_unknown_speaker_rejected(self):
+        rec = {"conversations": [{"from": "narrator", "value": "x"},
+                                 {"from": "gpt", "value": "a"}]}
+        assert ChatValidator().check(rec) == chat.UNKNOWN_ROLE
+
+    def test_not_sharegpt_without_messages(self):
+        assert ChatValidator().check({"conversations": "nope"}) == chat.MISSING_MESSAGES
+
+    def test_format_chatml_converts(self):
+        from sanitizer_pro.core import format_chatml
+        assert format_chatml(self.CONV)["messages"][1] == {"role": "user", "content": "Hi"}
+
+
+class TestChatTemplateBudget:
+    def test_conversation_counter_preferred(self):
+        seen = []
+
+        def counter(messages):
+            seen.append(messages)
+            return 100
+
+        v = ChatValidator(max_tokens=50, conversation_counter=counter)
+        assert v.check(VALID) == chat.TOO_MANY_TOKENS
+        assert seen and seen[0][0]["role"] == "system"
+
+    def test_falls_back_when_template_fails(self):
+        def counter(messages):
+            raise ValueError("template rejects tool role")
+
+        v = ChatValidator(max_tokens=50, conversation_counter=counter)
+        assert v.check(VALID) is None
+
+    def test_whitespace_has_no_conversation_counter(self):
+        text, conv = chat.make_counters('whitespace')
+        assert text("a b c") == 3 and conv is None

@@ -104,11 +104,13 @@ class Sanitizer:
 
         self._chat_validator: Optional[Any] = None
         if c.validate_chat:
-            from sanitizer_pro.chat import ChatValidator, make_token_counter
+            from sanitizer_pro.chat import ChatValidator, make_counters
+            text_counter, conversation_counter = (
+                make_counters(c.tokenizer) if c.chat_max_tokens else (None, None))
             self._chat_validator = ChatValidator(
                 allowed_roles=c.chat_roles, lenient=c.chat_lenient,
-                max_tokens=c.chat_max_tokens,
-                token_counter=make_token_counter(c.tokenizer) if c.chat_max_tokens else None)
+                max_tokens=c.chat_max_tokens, token_counter=text_counter,
+                conversation_counter=conversation_counter)
 
         if self.transformer.scorer is not None:
             logging.info(f"Quality scorer ready: {self.transformer.scorer.backend_name}")
