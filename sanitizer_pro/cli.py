@@ -21,7 +21,7 @@ except ImportError:
 from sanitizer_pro import __version__
 from sanitizer_pro.api import Sanitizer
 from sanitizer_pro.config import apply_config_to_args, collect_explicit_args, load_config_file
-from sanitizer_pro.io.readers import read_records
+from sanitizer_pro.io.sources import chunkable, expand_inputs, is_multi_input, iter_files, jsonl_chunks
 from sanitizer_pro.langid import LANG_BACKENDS
 from sanitizer_pro.io.writers import ShardedWriter, SplitWriter, StreamingWriter, parse_split_spec
 from sanitizer_pro.pii import PseudoRegistry
@@ -32,7 +32,7 @@ from sanitizer_pro.settings import (
 )
 from sanitizer_pro.stats import RunStats
 from sanitizer_pro.utils import _EXCEL_WARN_MB_DEFAULT, _STDIN, _STDOUT, ConfigurationError, resolve_fmt
-from sanitizer_pro.worker import _worker_fn, _worker_init
+from sanitizer_pro.worker import _worker_chunk, _worker_fn, _worker_init
 
 # =============================================================================
 # Constants
@@ -116,7 +116,10 @@ def build_parser() -> argparse.ArgumentParser:
 
     # Core I/O
     parser.add_argument('--version', action='version', version=f"sanitize {__version__}")
-    parser.add_argument('--input', default=None, help="Input file or '-' for stdin.")
+    parser.add_argument('--input', default=None,
+                        help="Input file, directory (searched recursively), glob pattern "
+                             "(quote it: 'data/*.jsonl', 'data/**/*.parquet'), hf://… URI, "
+                             "or '-' for stdin. Multiple files are read in sorted order.")
     parser.add_argument('--output', default=None, help="Output file or '-' for stdout.")
     parser.add_argument('--input-format', default=None, metavar='FMT', help="Override input format.")
     parser.add_argument('--output-format', default=None, metavar='FMT', help="Override output format.")
@@ -345,6 +348,8 @@ class IOPlan:
     excel_sheet: Any
     split_spec: Optional[Dict[str, float]]
     no_output: bool
+    files: List[str]                 # the input files (one for stdin/hf/a single file)
+    multi: bool = False              # --input named a directory or glob
 
 
 @dataclass
@@ -440,19 +445,34 @@ def _plan_io(args: argparse.Namespace, config: SanitizerConfig) -> IOPlan:
         split_spec = parse_split_spec(args.split)
 
     is_hub_input = str(args.input).startswith('hf://')
+    multi = is_multi_input(args.input)
+    files = [args.input]
     if is_hub_input:
         from sanitizer_pro.hub import parse_hf_uri
         parse_hf_uri(args.input)  # fail fast on malformed URIs
         input_fmt = 'hf'
+    elif multi:
+        try:
+            files = expand_inputs(args.input, exclude=[args.output])
+        except ValueError as exc:
+            raise CliError(str(exc)) from None
+        formats = {resolve_fmt(f, args.input_format) for f in files}
+        if '' in formats:
+            raise CliError("Cannot detect the format of some input files. Supply --input-format.")
+        input_fmt = formats.pop() if len(formats) == 1 else ''   # '' = mixed formats
+        logging.info(f"Input: {len(files):,} files from {args.input}")
     else:
         input_fmt = resolve_fmt(args.input, args.input_format)
         if not input_fmt:
             raise CliError("Cannot detect input format. Supply --input-format.")
     excel_sheet: Any = 0
-    if input_fmt in {'.xlsx', '.xls'}:
+    if not multi and input_fmt in {'.xlsx', '.xls'}:
         excel_sheet = resolve_excel_sheet(args.excel_sheet_name, args.excel_sheet_index,
                                           args.input if args.input != _STDIN else None)
-    if args.input != _STDIN and not is_hub_input and not os.path.exists(args.input):
+    elif args.excel_sheet_name is not None or args.excel_sheet_index is not None:
+        excel_sheet = resolve_excel_sheet(args.excel_sheet_name, args.excel_sheet_index)
+    if (args.input != _STDIN and not is_hub_input and not multi
+            and not os.path.exists(args.input)):
         raise CliError(f"Input file not found: {args.input}")
 
     if args.output not in {_STDOUT, '/dev/null'}:
@@ -463,7 +483,8 @@ def _plan_io(args: argparse.Namespace, config: SanitizerConfig) -> IOPlan:
         if not (no_output or args.output == '/dev/null'):
             raise CliError("Cannot detect output format. Supply --output-format.")
         output_fmt = input_fmt if input_fmt not in ('', 'hf') else '.jsonl'
-    return IOPlan(input_fmt, output_fmt, is_hub_input, excel_sheet, split_spec, no_output)
+    return IOPlan(input_fmt, output_fmt, is_hub_input, excel_sheet, split_spec, no_output,
+                  files, multi)
 
 
 def _prepare_resume(args: argparse.Namespace, config: SanitizerConfig, plan: IOPlan) -> ResumeState:
@@ -574,7 +595,7 @@ def _progress(it: Iterable[Any], args: argparse.Namespace, desc: str) -> Iterabl
 
 
 def _run_pipeline(args: argparse.Namespace, sanitizer: Sanitizer, records: Iterator[Any],
-                  writer: Any, ckpt: _Checkpointer) -> None:
+                  writer: Any, ckpt: _Checkpointer, plan: Optional[IOPlan] = None) -> None:
     def write(out: List[Dict[str, Any]]) -> None:
         if writer is not None:
             for rec in out:
@@ -587,6 +608,8 @@ def _run_pipeline(args: argparse.Namespace, sanitizer: Sanitizer, records: Itera
                 break
             write(sanitizer.feed(record))
             ckpt.maybe_save(writer)
+    elif plan is not None and chunkable(plan.files, resolve_fmt('', args.input_format) or None):
+        _run_chunked(args, sanitizer, plan.files, write, limit)
     else:
         def dispatchable() -> Iterator[Dict[str, Any]]:
             # Non-objects are counted here so `malformed` stays accurate.
@@ -598,7 +621,7 @@ def _run_pipeline(args: argparse.Namespace, sanitizer: Sanitizer, records: Itera
                     sanitizer.stats.malformed += 1
 
         pool = multiprocessing.Pool(processes=args.jobs, initializer=_worker_init,
-                                    initargs=(sanitizer.config, args.log_level))
+                                    initargs=(sanitizer.config, args.log_level, args.encoding))
         stopped_early = False
         try:
             results = pool.imap(_worker_fn, dispatchable(), chunksize=args.chunk_size)
@@ -617,6 +640,59 @@ def _run_pipeline(args: argparse.Namespace, sanitizer: Sanitizer, records: Itera
                 pool.close()
             pool.join()
     write(sanitizer.finish())
+
+
+def _run_chunked(args: argparse.Namespace, sanitizer: Sanitizer, files: List[str],
+                 write: Any, limit: Optional[int]) -> None:
+    """--jobs N on plain JSONL files: workers read and transform byte-range
+    chunks themselves; results come back in chunk order, so the output is
+    identical to a single-process run."""
+    stats = sanitizer.stats
+    pool = multiprocessing.Pool(processes=args.jobs, initializer=_worker_init,
+                                initargs=(sanitizer.config, args.log_level, args.encoding))
+    stopped_early = False
+    bad = 0
+    try:
+        progress = _progress_bar(args, sum(os.path.getsize(f) for f in files))
+        for chunk, items in zip(jsonl_chunks(files),
+                                pool.imap(_worker_chunk, jsonl_chunks(files))):
+            for transformed, pii_counts, problem in items:
+                if limit is not None and stats.total >= limit:
+                    stopped_early = True
+                    break
+                if problem is not None:
+                    stats.total += 1
+                    stats.malformed += 1
+                    bad += 1
+                    if bad <= 5:
+                        logging.warning(f"Skipping malformed input: {problem}")
+                    continue
+                assert transformed is not None
+                write(sanitizer.feed_transformed(transformed, pii_counts))
+            if progress is not None:
+                progress.update(chunk.end - chunk.start)
+            if stopped_early:
+                break
+        if progress is not None:
+            progress.close()
+        if bad > 5:
+            logging.warning(f"Skipped {bad} malformed input records in total.")
+    except BaseException:
+        stopped_early = True
+        raise
+    finally:
+        if stopped_early:
+            pool.terminate()
+        else:
+            pool.close()
+        pool.join()
+
+
+def _progress_bar(args: argparse.Namespace, total_bytes: int) -> Any:
+    if TQDM_AVAILABLE and not args.no_progress and not args.quiet:
+        return _tqdm(total=total_bytes, desc="Processing", unit="B", unit_scale=True,
+                     dynamic_ncols=True, smoothing=0.1)
+    return None
 
 
 def _print_summary(args: argparse.Namespace, stats: RunStats) -> None:
@@ -693,7 +769,8 @@ def _write_artifacts(args: argparse.Namespace, config: SanitizerConfig, plan: IO
         (bool(c.lang_filter), f"language filter ({','.join(c.lang_filter or [])})"),
     ] if enabled]
     meta = {
-        'Input': f"{args.input} ({plan.input_fmt})",
+        'Input': (f"{args.input} ({len(plan.files):,} files)" if plan.multi
+                  else f"{args.input} ({plan.input_fmt})"),
         'Output': f"{args.output} ({plan.output_fmt}){_mode_tag(args)}",
         'Profile': args.profile or '—',
         'Active features': ', '.join(features) or 'none',
@@ -745,12 +822,18 @@ def main() -> None:
                  f"| jobs={args.jobs}")
     started = time.monotonic()
     try:
-        records: Iterator[Any] = read_records(
-            args.input, encoding=args.encoding, paragraph_mode=args.paragraph_mode,
+        if plan.is_hub_input:
+            fmt = None
+        elif plan.multi:
+            fmt = resolve_fmt('', args.input_format) or None   # else each file's extension
+        else:
+            fmt = plan.input_fmt
+        records: Iterator[Any] = iter_files(
+            plan.files, input_format=fmt, encoding=args.encoding,
+            paragraph_mode=args.paragraph_mode,
             csv_delimiter=args.csv_delimiter, csv_no_header=args.csv_no_header,
             csv_columns=as_list(args.csv_columns), excel_sheet=plan.excel_sheet,
             excel_warn_mb=args.excel_warn_size,
-            input_format=None if plan.is_hub_input else plan.input_fmt,
             json_path=args.json_path, hf_cache=args.hf_cache, yield_malformed=True)
     except Exception as exc:
         logging.critical(f"Failed to open input: {exc}"); sys.exit(1)
@@ -761,7 +844,7 @@ def main() -> None:
     try:
         writer_ctx = _open_writer(args, plan, appending=resume.stats is not None)
         with writer_ctx as writer:
-            _run_pipeline(args, sanitizer, records, writer, ckpt)
+            _run_pipeline(args, sanitizer, records, writer, ckpt, plan)
         if args.resume:
             from sanitizer_pro.checkpoint import clear_checkpoint
             clear_checkpoint(args.output)

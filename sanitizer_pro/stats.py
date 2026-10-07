@@ -41,12 +41,13 @@ class RunStats:
             for kind, n in counts.items():
                 self.pii_counts[kind] = self.pii_counts.get(kind, 0) + n
 
-    def record_kept(self, text: str, lang: Optional[str] = None) -> None:
+    def record_kept(self, text: str, lang: Optional[str] = None,
+                    n_words: Optional[int] = None) -> None:
         self.kept += 1
         n = len(text)
         bucket = next((b for b in reversed(_CHAR_BUCKETS) if n >= b), _CHAR_BUCKETS[0])
         self.char_hist[bucket] += 1
-        w = len(words_of(text))
+        w = n_words if n_words is not None else len(words_of(text))
         wbucket = next((b for b in reversed(_WORD_BUCKETS) if w >= b), _WORD_BUCKETS[0])
         self.word_hist[wbucket] += 1
         if lang:

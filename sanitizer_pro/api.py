@@ -49,6 +49,7 @@ class Survivor(NamedTuple):
     quality_text: str
     lang: Optional[str]
     score: Optional[float]
+    n_words: Optional[int] = None
 
 
 Outcome = Union[ProcessResult, Survivor]
@@ -195,21 +196,23 @@ class Sanitizer:
             return ProcessResult(None, False, 'sampled_out', score=score, lang=t.lang)
 
         if self.deduper is not None:
-            key = t.quality_text if (c.fuzzy_dedup or c.semantic_dedup) else \
-                get_record_hash(sanitized, c.dedup_fields, c.dedup_normalize)
+            if c.fuzzy_dedup or c.semantic_dedup:
+                key = t.quality_text
+            else:
+                key = t.dedup_key or get_record_hash(sanitized, c.dedup_fields, c.dedup_normalize)
             if self.deduper.contains(key):
                 stats.deduplicated += 1
                 return ProcessResult(None, False, 'duplicate', score=score, lang=t.lang)
             self.deduper.add(key)
 
-        return Survivor(sanitized, t.quality_text, t.lang, score)
+        return Survivor(sanitized, t.quality_text, t.lang, score, t.n_words)
 
     def _emit(self, s: Survivor) -> Dict[str, Any]:
         if s.score is not None:
             self.stats.record_score(s.score)
             if self.config.quality_score_field:
                 s.record[self.config.quality_score_field] = s.score
-        self.stats.record_kept(s.quality_text, lang=s.lang)
+        self.stats.record_kept(s.quality_text, lang=s.lang, n_words=s.n_words)
         return s.record
 
     def _route(self, outcome: Outcome) -> List[Dict[str, Any]]:
