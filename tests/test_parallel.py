@@ -35,6 +35,24 @@ class TestKeyedPseudonyms:
         out = redact_pii(TEXT, pseudo_registry=PseudoRegistry(key="k"))
         assert "@redacted.local" in out and " 10." in out and "phone_" in out
 
+    def test_keyed_pseudonyms_are_never_redacted_again_in_the_same_pass(self):
+        # Decimal 48-bit ids put 13+ digit runs into pseudonyms, which the card
+        # pattern (run after email/secrets) then redacted a second time.
+        from sanitizer_pro.secrets import redact_secrets
+        expected = {"email": 1, "card": 1, "ip": 1, "github_token": 1}
+        for i in range(500):
+            reg, counts = PseudoRegistry(key="k"), {}
+            text = (f"mail user{i}@example.com card 4111 1111 1111 1111 ip "
+                    f"192.0.2.{i % 250 + 1} token ghp_{'a' * 30}{i:06d}")
+            redact_pii(redact_secrets(text, pseudo_registry=reg, counters=counts),
+                       pseudo_registry=reg, counters=counts)
+            assert counts == expected, (text, counts)
+
+    def test_keyed_ids_are_hex(self):
+        out = redact_pii("bob@example.org", pseudo_registry=PseudoRegistry(key="k"))
+        ident = out.split("@")[0].split("_")[1]
+        assert len(ident) == 12 and all(c in "0123456789abcdef" for c in ident)
+
     def test_unkeyed_numbering_unchanged(self):
         out = redact_pii(TEXT, pseudo_registry=PseudoRegistry())
         assert "email_0001@redacted.local" in out and "10.0.0.1" in out
