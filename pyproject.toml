@@ -57,6 +57,7 @@ gliner = [
 ]
 semantic = [
     "model2vec>=0.3.0",
+    "usearch>=2.0",
 ]
 lang = [
     "fasttext-numpy2-wheel>=0.9.2",
@@ -112,7 +113,7 @@ files = ["sanitizer_pro"]
 module = [
     "datasketch", "ijson", "langdetect", "model2vec", "numpy", "openpyxl", "pandas",
     "pyarrow", "pyarrow.*", "spacy", "torch", "tqdm", "transformers", "xlsxwriter", "yaml",
-    "fasttext", "huggingface_hub", "gliner2", "rensa",
+    "fasttext", "huggingface_hub", "gliner2", "rensa", "usearch", "usearch.*",
 ]
 ignore_missing_imports = true
 follow_imports = "skip"

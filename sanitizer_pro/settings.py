@@ -17,6 +17,7 @@ FieldOps = Tuple[Dict[str, str], Set[str], Set[str], Set[str]]  # renames, drops
 
 DEDUP_BACKENDS = ('memory', 'sqlite')
 FUZZY_BACKENDS = ('auto', 'rensa', 'datasketch')
+SEMANTIC_INDEXES = ('auto', 'usearch', 'lsh')
 QUALITY_SCORERS = ('heuristic', 'perplexity', 'fineweb-edu', 'dclm', 'fasttext')
 NER_BACKENDS = ('auto', 'spacy', 'transformers', 'gliner')
 
@@ -70,6 +71,7 @@ class SanitizerConfig:
     semantic_dedup: bool = False
     semantic_threshold: float = 0.9
     semantic_model: str = 'minishlab/potion-base-8M'
+    semantic_index: str = 'auto'
     dedup_backend: str = 'memory'
     dedup_db_path: Optional[str] = None
     dedup_fields: Optional[List[str]] = None
@@ -132,6 +134,8 @@ class SanitizerConfig:
         _require(not (self.semantic_dedup and self.fuzzy_dedup),
                  "semantic_dedup and fuzzy_dedup are mutually exclusive "
                  "(both compare quality text; pick one).")
+        _require(self.semantic_index in SEMANTIC_INDEXES,
+                 f"semantic_index must be one of {list(SEMANTIC_INDEXES)}.")
         _require(self.fuzzy_backend in FUZZY_BACKENDS,
                  f"fuzzy_backend must be one of {list(FUZZY_BACKENDS)}.")
         _require(self.dedup_backend in DEDUP_BACKENDS,

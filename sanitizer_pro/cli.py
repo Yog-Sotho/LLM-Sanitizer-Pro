@@ -27,7 +27,8 @@ from sanitizer_pro.io.writers import ShardedWriter, SplitWriter, StreamingWriter
 from sanitizer_pro.pii import PseudoRegistry
 from sanitizer_pro.settings import DEFAULTS as D
 from sanitizer_pro.settings import (
-    DEDUP_BACKENDS, FUZZY_BACKENDS, NER_BACKENDS, QUALITY_SCORERS, SanitizerConfig, as_list,
+    DEDUP_BACKENDS, FUZZY_BACKENDS, NER_BACKENDS, QUALITY_SCORERS, SEMANTIC_INDEXES,
+    SanitizerConfig, as_list,
 )
 from sanitizer_pro.stats import RunStats
 from sanitizer_pro.utils import _EXCEL_WARN_MB_DEFAULT, _STDIN, _STDOUT, ConfigurationError, resolve_fmt
@@ -194,6 +195,10 @@ def build_parser() -> argparse.ArgumentParser:
                     help='Cosine similarity threshold for --semantic-dedup (default 0.9).')
     fg.add_argument('--semantic-model', default=D.semantic_model, metavar='NAME',
                     help='model2vec static embedding model for --semantic-dedup.')
+    fg.add_argument('--semantic-index', default=D.semantic_index, choices=list(SEMANTIC_INDEXES),
+                    help='Nearest-neighbor index for --semantic-dedup: usearch (HNSW; '
+                         'stays fast as the index grows) or lsh (no extra dependency; '
+                         'slows down on large inputs). auto prefers usearch.')
     fg.add_argument('--dedup-fields', default='')
     fg.add_argument('--dedup-normalize', action='store_true')
     fg.add_argument('--dedup-backend', default=D.dedup_backend, choices=list(DEDUP_BACKENDS))

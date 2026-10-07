@@ -21,8 +21,28 @@ def fake_embed(text: str):
     return np.ones(8, dtype=np.float32)
 
 
+def _indexes():
+    out = ["lsh"]
+    try:
+        import usearch  # noqa: F401
+        out.append("usearch")
+    except ImportError:
+        pass
+    return out
+
+
+_INDEX = {"kind": "lsh"}
+
+
+@pytest.fixture(params=_indexes(), autouse=True)
+def index_kind(request):
+    """Every test runs against each available index."""
+    _INDEX["kind"] = request.param
+    return request.param
+
+
 def deduper(threshold=0.9):
-    return SemanticDeduper(threshold=threshold, _embed_fn=fake_embed)
+    return SemanticDeduper(threshold=threshold, _embed_fn=fake_embed, index=_INDEX["kind"])
 
 
 class TestSemanticDeduper:
@@ -81,3 +101,32 @@ def test_live_paraphrase_dedup():
     d.add("The cat sat quietly on the warm mat near the window.")
     assert d.contains("A cat was sitting quietly on the warm mat by the window.")
     assert not d.contains("Quarterly revenue grew by twelve percent year over year.")
+
+
+def test_index_selection(index_kind):
+    d = SemanticDeduper(_embed_fn=fake_embed, index=index_kind)
+    assert d.index_kind == index_kind
+    auto = SemanticDeduper(_embed_fn=fake_embed)
+    assert auto.index_kind == _indexes()[-1]          # usearch when installed
+    with pytest.raises(ValueError):
+        SemanticDeduper(_embed_fn=fake_embed, index="faiss")
+
+
+def test_matches_exact_search_on_random_vectors(index_kind):
+    rng = np.random.default_rng(0)
+    base = rng.standard_normal((2000, 64)).astype(np.float32)
+    base /= np.linalg.norm(base, axis=1, keepdims=True)
+    noise = rng.standard_normal(base.shape).astype(np.float32) * 0.05
+    near = base + noise
+    near /= np.linalg.norm(near, axis=1, keepdims=True)
+    vectors = {f"b{i}": v for i, v in enumerate(base)}
+    vectors.update({f"n{i}": v for i, v in enumerate(near)})
+    d = SemanticDeduper(threshold=0.95, index=index_kind, _embed_fn=lambda t: vectors[t])
+    for i in range(len(base)):
+        d.add(f"b{i}")
+    best = (near @ base.T).max(axis=1)
+    truth = best >= 0.95
+    got = np.array([d.contains(f"n{i}") for i in range(len(near))])
+    # Hits are verified against the threshold (usearch: f16 rounding aside).
+    assert not (got & (best < 0.95 - 0.005)).any()
+    assert (got & truth).sum() / truth.sum() >= 0.95

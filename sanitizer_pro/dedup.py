@@ -9,7 +9,7 @@ import struct
 import tempfile
 from typing import Any, Callable, Dict, Iterator, List, Optional, Protocol, Set, Tuple
 
-from sanitizer_pro.settings import FUZZY_BACKENDS
+from sanitizer_pro.settings import FUZZY_BACKENDS, SEMANTIC_INDEXES
 
 
 class Deduper(Protocol):
@@ -410,21 +410,43 @@ def is_durable(deduper: Any) -> bool:
 
 class SemanticDeduper:
     """Embedding-based near-duplicate detection: catches paraphrases that share
-    no n-grams. Static embeddings (model2vec, no torch) + random-hyperplane LSH
-    for candidate lookup, verified with exact cosine similarity — so there are
-    no false positives beyond the threshold itself."""
+    no n-grams. Static embeddings (model2vec, no torch); a record is a
+    duplicate when an earlier one has cosine similarity >= threshold.
+
+    Index: 'usearch' (HNSW approximate nearest-neighbor search over f16
+    vectors, ~log N per lookup) when installed, else 'lsh' (random-hyperplane
+    LSH, exact cosine checks, which scans more candidates as the index
+    grows). Either way a hit is checked against the threshold: no pair less
+    similar than the threshold is flagged (beyond f16 rounding, < 0.005 in
+    cosine, for usearch). Misses are measured by benchmarks/semantic_recall.py:
+    on model2vec embeddings of 20k records usearch matched exact search on
+    99.9% of decisions at ~3k rec/s, lsh on 98% at ~0.4k rec/s."""
 
     _NUM_BITS = 64
     _BAND_BITS = 8
+    _NEIGHBORS = 4          # ANN results checked per lookup
 
     def __init__(self, threshold: float = 0.9, model: str = 'minishlab/potion-base-8M',
-                 _embed_fn: Optional[Callable[[str], Any]] = None) -> None:
+                 _embed_fn: Optional[Callable[[str], Any]] = None,
+                 index: str = 'auto') -> None:
+        if index not in SEMANTIC_INDEXES:
+            raise ValueError(f"Unknown semantic index '{index}' {SEMANTIC_INDEXES}.")
         try:
             import numpy as np
         except ImportError:
             raise ImportError("Semantic dedup requires: pip install model2vec") from None
         self._np = np
         self.threshold = threshold
+        self._ann_cls: Any = None
+        if index in ('auto', 'usearch'):
+            try:
+                from usearch.index import Index
+                self._ann_cls = Index
+            except ImportError:
+                if index == 'usearch':
+                    raise ImportError("--semantic-index usearch requires: "
+                                      "pip install usearch") from None
+        self.index_kind = 'usearch' if self._ann_cls is not None else 'lsh'
         if _embed_fn is not None:
             self._embed_raw = _embed_fn
         else:
@@ -434,23 +456,27 @@ class SemanticDeduper:
                 raise ImportError("Semantic dedup requires: pip install model2vec") from None
             m = StaticModel.from_pretrained(model)
             self._embed_raw = lambda text: m.encode([text])[0]
-        self._planes: Any = None  # lazily sized to the embedding dim
+        self._ann: Any = None       # usearch index, created at the first add()
+        self._count = 0
+        self._planes: Any = None    # LSH: lazily sized to the embedding dim
         self._vectors: List[Any] = []
         self._buckets: Dict[Tuple[int, int], List[int]] = {}
         self._last: Optional[Tuple[str, Any, int]] = None  # (text, vector, signature) cache
 
     def _embed(self, text: str) -> Tuple[Any, int]:
-        if self._last is not None and self._last[0] == text:
+        if self._last is not None and self._last[0] is text:
             return self._last[1], self._last[2]
         np = self._np
         v = np.asarray(self._embed_raw(text), dtype=np.float32)
         norm = float(np.linalg.norm(v))
         if norm > 0:
             v = v / norm
-        if self._planes is None:
-            self._planes = np.random.RandomState(0).randn(v.shape[0], self._NUM_BITS)
-        bits = (v @ self._planes) > 0
-        sig = int(np.packbits(bits).tobytes().hex(), 16)
+        sig = 0
+        if self._ann_cls is None:
+            if self._planes is None:
+                self._planes = np.random.RandomState(0).randn(v.shape[0], self._NUM_BITS)
+            bits = (v @ self._planes) > 0
+            sig = int(np.packbits(bits).tobytes().hex(), 16)
         self._last = (text, v, sig)
         return v, sig
 
@@ -459,37 +485,50 @@ class SemanticDeduper:
             yield band, (sig >> (band * self._BAND_BITS)) & ((1 << self._BAND_BITS) - 1)
 
     def contains(self, text: str) -> bool:
-        if not self._vectors:
-            self._embed(text)  # warm the cache for the add() that may follow
+        v, sig = self._embed(text)   # also warms the cache for the add() that may follow
+        if self._count == 0:
             return False
-        v, sig = self._embed(text)
+        if self._ann is not None:
+            found = self._ann.search(v, min(self._NEIGHBORS, self._count))
+            return any(1.0 - float(d) >= self.threshold for d in found.distances)
         candidates: Set[int] = set()
         for key in self._bands(sig):
             candidates.update(self._buckets.get(key, ()))
-        for idx in candidates:
-            if float(v @ self._vectors[idx]) >= self.threshold:
-                return True
-        return False
+        return any(float(v @ self._vectors[idx]) >= self.threshold for idx in candidates)
 
     def add(self, text: str) -> None:
         v, sig = self._embed(text)
-        idx = len(self._vectors)
-        self._vectors.append(v)
-        for key in self._bands(sig):
-            self._buckets.setdefault(key, []).append(idx)
+        if self._ann_cls is not None:
+            if self._ann is None:
+                # connectivity/expansion: recall 1.0 vs exact search on hard
+                # (random 256-d) data at 100k vectors; benchmarks/semantic_recall.py
+                self._ann = self._ann_cls(ndim=v.shape[0], metric='cos', dtype='f16',
+                                          connectivity=32, expansion_add=64,
+                                          expansion_search=128)
+            self._ann.add(self._count, v)
+        else:
+            self._vectors.append(v)
+            for key in self._bands(sig):
+                self._buckets.setdefault(key, []).append(self._count)
+        self._count += 1
 
     def close(self) -> None:
         self._vectors.clear()
         self._buckets.clear()
+        if self._ann is not None:
+            self._ann.reset()
+            self._ann = None
+        self._count = 0
 
 
 def make_deduper(backend: str, db_path: Optional[str] = None, fuzzy: bool = False,
                  fuzzy_threshold: float = 0.8, semantic: bool = False,
                  semantic_threshold: float = 0.9,
                  semantic_model: str = 'minishlab/potion-base-8M',
-                 fuzzy_backend: str = 'auto') -> Deduper:
+                 fuzzy_backend: str = 'auto', semantic_index: str = 'auto') -> Deduper:
     if semantic:
-        return SemanticDeduper(threshold=semantic_threshold, model=semantic_model)
+        return SemanticDeduper(threshold=semantic_threshold, model=semantic_model,
+                               index=semantic_index)
     if fuzzy:
         return MinHashDeduper(threshold=fuzzy_threshold, backend=fuzzy_backend,
                               store=backend, db_path=db_path)

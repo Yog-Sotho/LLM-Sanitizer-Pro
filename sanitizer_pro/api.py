@@ -89,7 +89,7 @@ class Sanitizer:
                 c.dedup_backend, c.dedup_db_path, fuzzy=c.fuzzy_dedup,
                 fuzzy_threshold=c.fuzzy_threshold, semantic=c.semantic_dedup,
                 semantic_threshold=c.semantic_threshold, semantic_model=c.semantic_model,
-                fuzzy_backend=c.fuzzy_backend)
+                fuzzy_backend=c.fuzzy_backend, semantic_index=c.semantic_index)
 
         self._contamination: Optional[Any] = None
         if c.decontaminate or c.decontam_refs:
