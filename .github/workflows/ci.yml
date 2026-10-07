@@ -27,7 +27,7 @@ jobs:
         run: pytest tests/ -q
       - name: Test (with optional deps)
         run: |
-          pip install pyyaml langdetect datasketch ijson pyarrow
+          pip install pyyaml langdetect datasketch rensa ijson pyarrow
           pytest tests/ -q
 
   typecheck:

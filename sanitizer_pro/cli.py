@@ -27,7 +27,7 @@ from sanitizer_pro.io.writers import ShardedWriter, SplitWriter, StreamingWriter
 from sanitizer_pro.pii import PseudoRegistry
 from sanitizer_pro.settings import DEFAULTS as D
 from sanitizer_pro.settings import (
-    DEDUP_BACKENDS, NER_BACKENDS, QUALITY_SCORERS, SanitizerConfig, as_list,
+    DEDUP_BACKENDS, FUZZY_BACKENDS, NER_BACKENDS, QUALITY_SCORERS, SanitizerConfig, as_list,
 )
 from sanitizer_pro.stats import RunStats
 from sanitizer_pro.utils import _EXCEL_WARN_MB_DEFAULT, _STDIN, _STDOUT, ConfigurationError, resolve_fmt
@@ -177,9 +177,16 @@ def build_parser() -> argparse.ArgumentParser:
     # Features
     fg = parser.add_argument_group('Features')
     fg.add_argument('--deduplicate', action='store_true')
-    fg.add_argument('--fuzzy-dedup', action='store_true', help='Use MinHash+LSH for near-duplicate detection.')
+    fg.add_argument('--fuzzy-dedup', action='store_true',
+                    help='Near-duplicate detection: MinHash over word 3-shingles, LSH '
+                         'candidates verified by signature similarity. With '
+                         '--dedup-backend sqlite the index lives on disk (constant memory).')
     fg.add_argument('--fuzzy-threshold', type=float, default=D.fuzzy_threshold, metavar='T',
                     help='Jaccard similarity threshold for --fuzzy-dedup (0-1, default 0.8).')
+    fg.add_argument('--fuzzy-backend', default=D.fuzzy_backend, choices=list(FUZZY_BACKENDS),
+                    help='MinHash implementation: rensa (Rust, ~10x faster; '
+                         "pip install 'llm-sanitizer-pro[fuzzy]') or datasketch. "
+                         'auto prefers rensa.')
     fg.add_argument('--semantic-dedup', action='store_true',
                     help='Embedding-based near-dedup: drops paraphrases that share no '
                          'n-grams (pip install model2vec; ~30MB model, no torch).')
@@ -510,12 +517,12 @@ class _Checkpointer:
     """Writes a consistent checkpoint every N input records (single process)."""
 
     def __init__(self, args: argparse.Namespace, sanitizer: Sanitizer) -> None:
-        from sanitizer_pro.dedup import SQLiteDeduper
+        from sanitizer_pro.dedup import is_durable
         self.args, self.s = args, sanitizer
         # Only a named SQLite DB survives the process, so only it is rolled back.
-        self.durable_dedup: Optional[SQLiteDeduper] = (
+        self.durable_dedup: Optional[Any] = (
             sanitizer.deduper if args.resume and args.dedup_db_path
-            and isinstance(sanitizer.deduper, SQLiteDeduper) else None)
+            and is_durable(sanitizer.deduper) else None)
 
     def rollback_dedup(self, mark: Optional[int]) -> None:
         if self.durable_dedup is None:
@@ -670,7 +677,7 @@ def _write_artifacts(args: argparse.Namespace, config: SanitizerConfig, plan: IO
         (c.redact_secrets, 'secrets redaction'),
         (c.pii_pseudonymize, 'pseudonymization'),
         (c.deduplicate, f'exact dedup ({c.dedup_backend})'),
-        (c.fuzzy_dedup, f'fuzzy dedup (t={c.fuzzy_threshold})'),
+        (c.fuzzy_dedup, f'fuzzy dedup (t={c.fuzzy_threshold}, {c.dedup_backend})'),
         (c.semantic_dedup, f'semantic dedup (t={c.semantic_threshold})'),
         (bool(c.decontaminate or c.decontam_refs),
          'decontamination' + (f" ({','.join(c.decontaminate)})" if c.decontaminate else '')),

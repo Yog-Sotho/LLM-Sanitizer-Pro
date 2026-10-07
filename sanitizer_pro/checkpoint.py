@@ -118,7 +118,8 @@ def warn_about_volatile_state(args: Any) -> None:
             "--resume with in-memory dedup: duplicate detection restarts empty on "
             "resume. Use --dedup-backend sqlite --dedup-db-path PATH for exact "
             "cross-resume dedup.")
-    if getattr(args, 'fuzzy_dedup', False):
-        logging.warning("--resume with --fuzzy-dedup: the MinHash index restarts "
-                        "empty on resume; near-duplicates across the boundary may "
-                        "slip through.")
+    if (getattr(args, 'fuzzy_dedup', False)
+            and (args.dedup_backend != 'sqlite' or not args.dedup_db_path)):
+        logging.warning("--resume with an in-memory --fuzzy-dedup index: it restarts "
+                        "empty on resume, so near-duplicates across the boundary may "
+                        "slip through. Use --dedup-backend sqlite --dedup-db-path PATH.")

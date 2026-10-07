@@ -17,7 +17,6 @@ slower CI runners. Throughput beyond one core comes from --jobs.
 import argparse
 import json
 import os
-import resource
 import subprocess
 import sys
 import tempfile
@@ -41,7 +40,10 @@ SCENARIOS: List[Scenario] = [
     Scenario("regex+dedup", ["--remove-pii", "--redact-secrets", "--deduplicate"],
              target_rps=4_500),
     Scenario("dedup-sqlite", ["--deduplicate", "--dedup-backend", "sqlite"]),
-    Scenario("fuzzy", ["--fuzzy-dedup"], needs=("datasketch",)),
+    Scenario("fuzzy", ["--fuzzy-dedup"], target_rps=3_000, needs=("rensa",)),
+    Scenario("fuzzy-sqlite", ["--fuzzy-dedup", "--dedup-backend", "sqlite"], needs=("rensa",)),
+    Scenario("fuzzy-datasketch", ["--fuzzy-dedup", "--fuzzy-backend", "datasketch"],
+             needs=("datasketch",)),
     Scenario("rules", ["--quality-rules", "all"]),
 ]
 JOBS_FLAGS = ["--remove-pii", "--redact-secrets", "--deduplicate"]
@@ -62,21 +64,23 @@ def run(corpus: str, flags: Sequence[str], jobs: int = 1) -> Dict[str, float]:
     cmd = [sys.executable, "-m", "sanitizer_pro", "--input", corpus,
            "--output", os.path.join(out_dir, "out.jsonl"), "--quiet", "--no-progress",
            "--jobs", str(jobs), "--stats-file", os.path.join(out_dir, "stats.json"), *flags]
-    before = resource.getrusage(resource.RUSAGE_CHILDREN)
+    err_path = os.path.join(out_dir, "stderr.txt")
     t0 = time.perf_counter()
-    proc = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
-    if proc.returncode:
-        raise RuntimeError(f"{' '.join(cmd)} failed:\n{proc.stderr[-2000:]}")
+    with open(err_path, "w") as err:
+        proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=err)
+        _, status, usage = os.wait4(proc.pid, 0)   # this child's own peak RSS
     elapsed = time.perf_counter() - t0
-    after = resource.getrusage(resource.RUSAGE_CHILDREN)
+    proc.returncode = os.waitstatus_to_exitcode(status)
+    if proc.returncode:
+        with open(err_path) as f:
+            raise RuntimeError(f"{' '.join(cmd)} failed:\n{f.read()[-2000:]}")
     with open(os.path.join(out_dir, "stats.json"), encoding="utf-8") as f:
         stats = json.load(f)
     total = stats.get("total", 0)
     return {"seconds": round(elapsed, 2), "records": total,
             "rps": round(total / elapsed), "mb_s": round(os.path.getsize(corpus) / elapsed / 1e6, 1),
             "kept": stats.get("kept", 0),
-            # ru_maxrss is the largest child so far (KiB on Linux)
-            "peak_rss_mb": round(max(before.ru_maxrss, after.ru_maxrss) / 1024)}
+            "peak_rss_mb": round(usage.ru_maxrss / 1024)}   # KiB on Linux
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
