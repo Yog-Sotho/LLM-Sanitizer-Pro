@@ -60,7 +60,7 @@ BANNER = r"""
 ║   ██████╔╝██║  ██║   ██║   ██║  ██║███████║███████╗   ██║   ║
 ║   ╚═════╝ ╚═╝  ╚═╝   ╚═╝   ╚═╝  ╚═╝╚══════╝╚══════╝   ╚═╝   ║
 ║                                                              ║
-║        S A N I T I Z E R   P R O   v 3 . 0                  ║
+║                  S A N I T I Z E R   P R O                   ║
 ║                                                              ║
 ║   ▸ Multi-format  ▸ PII Redaction  ▸ Quality Filtering       ║
 ║   ▸ Fuzzy Dedup   ▸ Parallel Jobs  ▸ LLM-Ready Output        ║
@@ -113,7 +113,7 @@ def resolve_excel_sheet(
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="LLM Dataset Sanitizer PRO v3.0 — Modular Production Cleaner",
+        description=f"LLM Dataset Sanitizer PRO v{__version__} — Modular Production Cleaner",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""Examples:
   sanitize --input data.jsonl --output clean.jsonl --deduplicate --remove-pii
@@ -123,6 +123,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
 
     # Core I/O
+    parser.add_argument('--version', action='version', version=f"sanitize {__version__}")
     parser.add_argument('--input', default=None, help="Input file or '-' for stdin.")
     parser.add_argument('--output', default=None, help="Output file or '-' for stdout.")
     parser.add_argument('--input-format', default=None, metavar='FMT', help="Override input format.")
@@ -331,7 +332,8 @@ def _print_info_and_exit(args: argparse.Namespace, parser: argparse.ArgumentPars
     """--generate-config, --decontaminate list and --profile list."""
     if args.generate_config is not None:
         template = {a.dest: a.default for a in parser._actions
-                    if a.dest not in {'help', 'generate_config', 'config'} and a.default is not None}
+                    if a.dest not in {'help', 'generate_config', 'config'}
+                    and a.default is not None and a.default is not argparse.SUPPRESS}
         if args.generate_config == 'yaml':
             try:
                 import yaml as _yaml

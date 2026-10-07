@@ -1,4 +1,4 @@
-# LLM Dataset Sanitizer PRO v3.0
+# LLM Dataset Sanitizer PRO
 
 Production-grade, modular dataset sanitization, PII redaction, and curation pipeline for LLM training and fine-tuning.
 

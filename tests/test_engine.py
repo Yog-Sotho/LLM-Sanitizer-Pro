@@ -148,3 +148,19 @@ class TestContentAddressedSampling:
         subset = split_of(list(reversed(recs[::2])), "b")   # different order, half filtered out
         assert subset["test"] == {i for i in full["test"] if i % 2 == 0}
         assert subset["train"] == {i for i in full["train"] if i % 2 == 0}
+
+
+def test_version_is_single_sourced():
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    from sanitizer_pro import __version__
+    from sanitizer_pro.report import generate_report_html
+    repo = Path(__file__).resolve().parent.parent
+    r = subprocess.run([sys.executable, '-m', 'sanitizer_pro', '--version'],
+                       capture_output=True, text=True, cwd=str(repo))
+    assert r.stdout.strip() == f"sanitize {__version__}"
+    assert f"v{__version__}</footer>" in generate_report_html({'total': 0, 'kept': 0})
+    pyproject = (repo / 'pyproject.toml').read_text()
+    assert 'dynamic = ["version"]' in pyproject and 'sanitizer_pro.__version__' in pyproject
