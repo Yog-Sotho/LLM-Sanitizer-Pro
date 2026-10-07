@@ -286,7 +286,8 @@ def apply_patterns(
 
     Shared by PII and secrets redaction. Built-in patterns may have a
     validator (match rejected -> text kept) and a trimmer (trailing
-    punctuation kept outside the redaction). Pseudonymization takes
+    punctuation kept outside the redaction); a named group 'secret' limits
+    the redaction to that span. Pseudonymization takes
     precedence, then masking (for kinds with a mask function), then plain
     token replacement. `counters` tallies substitutions per kind."""
     mask_fns = mask_fns if mask_fns is not None else _MASK_FN
@@ -296,19 +297,31 @@ def apply_patterns(
         current = text
         hits = 0
 
+        has_secret_group = 'secret' in pattern.groupindex
+
         def _sub(m: re.Match[str]) -> str:
             nonlocal hits
             if validate is not None and not validate(current, m):
                 return m.group(0)
-            value, suffix = trim(m.group(0)) if trim is not None else (m.group(0), '')
+            # A named group 'secret' marks the sensitive span; the rest of the
+            # match (e.g. `api_key = "`) is context and stays.
+            if has_secret_group and m.group('secret') is not None:
+                lo, hi = m.span('secret')
+                prefix, value, suffix = (current[m.start():lo], current[lo:hi],
+                                         current[hi:m.end()])
+            else:
+                prefix, value, suffix = '', m.group(0), ''
+            if trim is not None:
+                value, tail = trim(value)
+                suffix = tail + suffix
             if not value:
                 return m.group(0)
             hits += 1
             if pseudo_registry is not None:
-                return pseudo_registry.get_or_create(value, kind) + suffix
+                return prefix + pseudo_registry.get_or_create(value, kind) + suffix
             if mask and kind in mask_fns:
-                return mask_fns[kind](m) + suffix
-            return token + suffix
+                return prefix + mask_fns[kind](m) + suffix
+            return prefix + token + suffix
 
         text = pattern.sub(_sub, current)
         if hits and counters is not None:

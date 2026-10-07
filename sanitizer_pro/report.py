@@ -38,6 +38,9 @@ _PII_LABELS = {
     'slack_token': 'Slack tokens', 'stripe_key': 'Stripe keys', 'twilio_key': 'Twilio keys',
     'sendgrid_key': 'SendGrid keys', 'jwt': 'JWTs', 'bearer_token': 'Bearer tokens',
     'connection_string': 'Connection strings', 'generic_secret': 'Generic secrets',
+    'aws_secret_key': 'AWS secret keys', 'gitlab_token': 'GitLab tokens',
+    'huggingface_token': 'Hugging Face tokens', 'npm_token': 'npm tokens',
+    'pypi_token': 'PyPI tokens', 'azure_storage_key': 'Azure storage keys',
 }
 
 
