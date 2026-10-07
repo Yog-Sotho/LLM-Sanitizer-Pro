@@ -115,6 +115,31 @@ class StreamingWriter:
         if self._file is not None and not self._file.closed:
             self._file.flush()
 
+    def durable_size(self) -> int:
+        """Make everything written so far durable and return the output size
+        in bytes — a safe truncation point for resuming after a crash.
+
+        gzip output is closed and reopened in append mode so the offset falls
+        on a complete gzip member boundary (a flushed-but-open member is not
+        decodable after truncation)."""
+        if self.output_path == _STDOUT or self.fmt not in self.APPENDABLE_FORMATS:
+            raise ConfigurationError(f"{self.fmt} output to {self.output_path} has no durable size.")
+        if self.output_path.lower().endswith('.gz'):
+            self._file.close()
+            self._file = smart_open(self.output_path, 'a', encoding=self.encoding)
+            if self._csv_writer is not None:
+                self._csv_writer = csv.DictWriter(
+                    self._file, fieldnames=self._csv_fields, extrasaction='ignore')
+            fd = os.open(self.output_path, os.O_RDONLY)
+            try:
+                os.fsync(fd)
+            finally:
+                os.close(fd)
+        else:
+            self._file.flush()
+            os.fsync(self._file.fileno())
+        return os.path.getsize(self.output_path)
+
     def _write_buffered(self) -> None:
         if self.fmt in {'.xlsx', '.xls'}:
             if xlsxwriter:

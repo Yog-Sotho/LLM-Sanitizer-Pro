@@ -90,6 +90,22 @@ class SQLiteDeduper:
             self.buffer.clear()
             self._pending.clear()
 
+    def high_water_mark(self) -> int:
+        """Commit pending hashes and return the largest rowid. Rows inserted
+        later get larger rowids, so the mark identifies exactly the hashes
+        known at a checkpoint."""
+        self.flush()
+        row = self._conn.execute('SELECT COALESCE(MAX(rowid), 0) FROM hashes').fetchone()
+        return int(row[0])
+
+    def rollback_to(self, mark: int) -> int:
+        """Forget hashes inserted after `mark` (they belong to records whose
+        output was discarded on resume). Returns the number removed."""
+        self.flush()
+        cur = self._conn.execute('DELETE FROM hashes WHERE rowid > ?', (mark,))
+        self._conn.commit()
+        return cur.rowcount
+
     def close(self) -> None:
         self.flush()
         try:

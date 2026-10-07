@@ -461,6 +461,7 @@ def main() -> None:
     resume_skip = 0
     resume_stats: Optional[Any] = None
     resume_pseudo: Optional[Dict[str, Any]] = None
+    resume_dedup_mark: Optional[int] = None
     if args.resume:
         from sanitizer_pro.checkpoint import load_checkpoint, warn_about_volatile_state
         problems = []
@@ -484,6 +485,18 @@ def main() -> None:
             resume_skip = int(ckpt['records_read'])
             resume_stats = ckpt['stats']
             resume_pseudo = ckpt.get('pseudo')
+            resume_dedup_mark = ckpt.get('dedup_mark')
+            if ckpt.get('rng') is not None:
+                from sanitizer_pro.checkpoint import rng_from_state
+                random.setstate(rng_from_state(ckpt['rng']))
+            from sanitizer_pro.checkpoint import truncate_output_to_checkpoint
+            try:
+                discarded = truncate_output_to_checkpoint(args.output, ckpt.get('output_bytes'))
+            except ConfigurationError as exc:
+                logging.error(str(exc)); sys.exit(1)
+            if discarded:
+                logging.info(f"Discarded {discarded:,} output bytes written after the last "
+                             "checkpoint; those records are re-processed.")
             warn_about_volatile_state(args)
             logging.info(f"Resuming from checkpoint: skipping {resume_skip:,} "
                          "already-processed input records, appending to output.")
@@ -568,6 +581,19 @@ def main() -> None:
         logging.error(str(exc)); sys.exit(1)
     run_stats = RunStats.from_state(resume_stats) if resume_stats else RunStats()
 
+    from sanitizer_pro.dedup import SQLiteDeduper
+    durable_dedup = (isinstance(deduper, SQLiteDeduper) and bool(args.dedup_db_path)
+                     and args.resume)
+    if durable_dedup and resume_stats is not None:
+        if resume_dedup_mark is not None:
+            forgotten = deduper.rollback_to(resume_dedup_mark)
+            if forgotten:
+                logging.info(f"Dedup DB: forgot {forgotten:,} hashes recorded after the "
+                             "last checkpoint.")
+        else:
+            logging.warning("Checkpoint has no dedup mark; hashes recorded after it may "
+                            "drop records as false duplicates.")
+
     try:
         record_iter: Iterator[Dict[str, Any]] = read_records(
             args.input, encoding=args.encoding, paragraph_mode=args.paragraph_mode,
@@ -591,16 +617,24 @@ def main() -> None:
         record_iter = _skip_consumed(record_iter, resume_skip)
 
     def _maybe_checkpoint(writer: Any) -> None:
+        """Called only between records, so the snapshot is consistent: every
+        record counted in `total` is fully handled and written."""
         if not args.resume or run_stats.total % args.checkpoint_interval != 0:
             return
-        from sanitizer_pro.checkpoint import save_checkpoint
-        if writer is not None:
-            writer.flush()
+        from sanitizer_pro.checkpoint import rng_to_state, save_checkpoint
+        # Order matters: make output and dedup state durable *before* the
+        # checkpoint that references them. A crash in between leaves the
+        # previous checkpoint, whose (smaller) marks make resume discard the
+        # newer rows and hashes.
+        output_bytes = writer.durable_size() if writer is not None else None
+        dedup_mark = deduper.high_water_mark() if durable_dedup else None
         if deduper is not None and hasattr(deduper, 'flush'):
             deduper.flush()
         save_checkpoint(args.output, input_path=args.input, records_read=run_stats.total,
                         stats_state=run_stats.to_state(),
-                        pseudo_state=pseudo_registry.to_state() if pseudo_registry else None)
+                        pseudo_state=pseudo_registry.to_state() if pseudo_registry else None,
+                        output_bytes=output_bytes, dedup_mark=dedup_mark,
+                        rng_state=rng_to_state(random.getstate()))
 
     use_progress = TQDM_AVAILABLE and not args.no_progress and not args.quiet and args.input != _STDIN
 
@@ -754,6 +788,7 @@ def main() -> None:
             if args.dry_run and run_stats.total > args.dry_run_size: break
             if not isinstance(record, dict):
                 run_stats.malformed += 1
+                _maybe_checkpoint(writer)
                 continue
             
             pii_before = sum(run_stats.pii_counts.values())
@@ -796,15 +831,14 @@ def main() -> None:
         logging.warning("Interrupted — flushing output …")
         if writer_ctx is not None and hasattr(writer_ctx, 'flush'): writer_ctx.flush()
         if args.resume:
-            from sanitizer_pro.checkpoint import save_checkpoint
-            try:
-                save_checkpoint(args.output, input_path=args.input,
-                                records_read=run_stats.total,
-                                stats_state=run_stats.to_state(),
-                                pseudo_state=pseudo_registry.to_state() if pseudo_registry else None)
-                logging.info("Checkpoint saved; rerun the same command with --resume to continue.")
-            except Exception as exc:
-                logging.warning(f"Could not save checkpoint on interrupt: {exc}")
+            # No checkpoint here: the interrupt may have landed mid-record, so
+            # the last periodic checkpoint is the latest consistent state.
+            from sanitizer_pro.checkpoint import checkpoint_path
+            if os.path.exists(checkpoint_path(args.output)):
+                logging.info("Rerun the same command with --resume to continue from the "
+                             "last checkpoint.")
+            else:
+                logging.info("No checkpoint was reached yet; a rerun starts from the beginning.")
         sys.exit(130)
     except Exception as exc:
         logging.critical(f"Fatal error: {exc}", exc_info=True)

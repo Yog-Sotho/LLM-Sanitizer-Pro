@@ -172,3 +172,135 @@ class TestResumeEndToEnd:
         r = run_cli('--input', str(inp), '--output', str(tmp_path / "o.json"), '--resume')
         assert r.returncode == 1
         assert 'appendable' in r.stderr
+
+
+HARD_CRASH_SCRIPT = """
+import os
+def quality_check(record):
+    if record.get("id") == {crash_at}:
+        os._exit(9)  # like SIGKILL / OOM-kill: no cleanup, no final flush
+    return True
+"""
+
+
+class TestHardCrashResume:
+    """A hard crash leaves rows written after the last checkpoint on disk
+    (buffer flushes). Resume must discard them instead of duplicating."""
+
+    N = 12
+    INTERVAL = 4
+    CRASH_AT = 11  # checkpoint at 8; records 9-10 (~10 KB) already hit the disk
+
+    def _input(self, tmp_path):
+        inp = tmp_path / "in.jsonl"
+        recs = [{"id": i, "text": ' '.join(f"w{i}x{j}" for j in range(900))}
+                for i in range(1, self.N + 1)]
+        inp.write_text('\n'.join(json.dumps(r) for r in recs) + '\n')
+        return inp
+
+    def _run(self, tmp_path, inp, out, script, *extra):
+        return run_cli('--input', str(inp), '--output', str(out), '--resume',
+                       '--checkpoint-interval', str(self.INTERVAL), '--quality-script',
+                       str(script), '--min-chars', '20', '--min-words', '5',
+                       '--no-progress', '--quiet', *extra)
+
+    def _scripts(self, tmp_path):
+        crash = tmp_path / "crash.py"
+        crash.write_text(HARD_CRASH_SCRIPT.replace('{crash_at}', str(self.CRASH_AT)))
+        ok = tmp_path / "ok.py"
+        ok.write_text(OK_SCRIPT)
+        return crash, ok
+
+    @staticmethod
+    def _ids(text):
+        return [json.loads(line)['id'] for line in text.splitlines()]
+
+    def test_no_duplicates_after_hard_crash(self, tmp_path):
+        inp, out = self._input(tmp_path), tmp_path / "out.jsonl"
+        crash, ok = self._scripts(tmp_path)
+        r1 = self._run(tmp_path, inp, out, crash)
+        assert r1.returncode == 9
+        ckpt = json.loads((tmp_path / "out.jsonl.checkpoint.json").read_text())
+        assert ckpt['records_read'] == 8
+        # the crash left rows past the checkpoint on disk — the bug's precondition
+        assert out.stat().st_size > ckpt['output_bytes']
+
+        r2 = self._run(tmp_path, inp, out, ok)
+        assert r2.returncode == 0, r2.stderr
+        assert self._ids(out.read_text()) == list(range(1, self.N + 1))
+        assert f'Total records processed : {self.N}' in r2.stderr
+        assert f'Kept                    : {self.N}' in r2.stderr
+
+    def test_gzip_output_survives_hard_crash(self, tmp_path):
+        import gzip
+        inp, out = self._input(tmp_path), tmp_path / "out.jsonl.gz"
+        crash, ok = self._scripts(tmp_path)
+        assert self._run(tmp_path, inp, out, crash).returncode == 9
+        r2 = self._run(tmp_path, inp, out, ok)
+        assert r2.returncode == 0, r2.stderr
+        with gzip.open(out, 'rt') as fh:
+            assert self._ids(fh.read()) == list(range(1, self.N + 1))
+
+    def test_sqlite_dedup_hashes_after_checkpoint_are_forgotten(self, tmp_path):
+        import sqlite3
+        from sanitizer_pro.core import get_record_hash
+        inp, out = self._input(tmp_path), tmp_path / "out.jsonl"
+        db = tmp_path / "dedup.db"
+        crash, ok = self._scripts(tmp_path)
+        dedup = ('--deduplicate', '--dedup-backend', 'sqlite', '--dedup-db-path', str(db))
+        assert self._run(tmp_path, inp, out, crash, *dedup).returncode == 9
+        # Simulate a batch commit that landed after the checkpoint: the hashes
+        # of records 9 and 10 are in the DB, but the checkpoint is at 8.
+        recs = [json.loads(line) for line in inp.read_text().splitlines()]
+        with sqlite3.connect(db) as conn:
+            conn.executemany('INSERT OR IGNORE INTO hashes VALUES (?)',
+                             [(get_record_hash(recs[i]),) for i in (8, 9)])
+        r2 = self._run(tmp_path, inp, out, ok, *dedup)
+        assert r2.returncode == 0, r2.stderr
+        assert self._ids(out.read_text()) == list(range(1, self.N + 1))
+        assert 'Deduplicated            : 0' in r2.stderr
+
+    def test_sampling_is_identical_to_an_uninterrupted_run(self, tmp_path):
+        inp = self._input(tmp_path)
+        crash, ok = self._scripts(tmp_path)
+        sample = ('--sample', '0.5', '--seed', '7')
+        ref = tmp_path / "ref.jsonl"
+        assert self._run(tmp_path, inp, ref, ok, *sample).returncode == 0
+        out = tmp_path / "out.jsonl"
+        assert self._run(tmp_path, inp, out, crash, *sample).returncode == 9
+        assert self._run(tmp_path, inp, out, ok, *sample).returncode == 0
+        assert self._ids(out.read_text()) == self._ids(ref.read_text())
+
+    def test_output_shorter_than_checkpoint_is_rejected(self, tmp_path):
+        inp, out = self._input(tmp_path), tmp_path / "out.jsonl"
+        crash, ok = self._scripts(tmp_path)
+        assert self._run(tmp_path, inp, out, crash).returncode == 9
+        out.write_text('')  # output replaced behind the checkpoint's back
+        r2 = self._run(tmp_path, inp, out, ok)
+        assert r2.returncode == 1
+        assert 'shorter' in r2.stderr
+
+
+def test_v1_checkpoint_still_loads(tmp_path):
+    inp = tmp_path / "in.jsonl"
+    inp.write_text('{"a": 1}\n')
+    out = str(tmp_path / "out.jsonl")
+    Path(checkpoint_path(out)).write_text(json.dumps({
+        'version': 1, 'input': input_fingerprint(str(inp)), 'records_read': 1,
+        'stats': RunStats().to_state(), 'pseudo': None}))
+    assert load_checkpoint(out, str(inp))['records_read'] == 1
+
+
+class TestSQLiteRollback:
+    def test_mark_and_rollback(self, tmp_path):
+        from sanitizer_pro.dedup import SQLiteDeduper
+        d = SQLiteDeduper(str(tmp_path / "d.db"), batch_size=2)
+        for h in ('a', 'b', 'c'):
+            d.add(h)
+        mark = d.high_water_mark()
+        for h in ('d', 'e', 'b'):  # 'b' already known: no new row
+            d.add(h)
+        d.flush()
+        assert d.rollback_to(mark) == 2
+        assert [d.contains(h) for h in 'abcde'] == [True, True, True, False, False]
+        d.close()
