@@ -11,7 +11,7 @@ when one is missed — the nightly CI job runs it.
 
 Targets are regression guards set from measurements (100k records, one
 x86 core, Python 3.13): passthrough ~12.6k rec/s, regex PII + secrets ~7.1k,
-with exact dedup ~6.1k; --jobs 4 gave 3.6x. They leave ~30% headroom for
+with exact dedup ~6.1k; --jobs 4 gave 3.3x (20.6k). They leave ~30% headroom for
 slower CI runners. Throughput beyond one core comes from --jobs.
 """
 import argparse
