@@ -2,11 +2,16 @@
 
 ## Unreleased (planned 4.0.0)
 
-Phase 1 of the audit plan (`docs/AUDIT_2026-10.md`): data-integrity, privacy and
-detection-quality fixes.
+Phases 1–2 of the audit plan (`docs/AUDIT_2026-10.md`): data-integrity, privacy and
+detection-quality fixes, then one shared pipeline engine.
 
 ### Behavior changes: read before upgrading
 
+- **`--sample` and `--split` are content-addressed.** A salted hash of each record
+  decides whether it is sampled and which split it lands in (`--seed` sets the
+  salt), so results are reproducible across runs, resumes and filter changes, and
+  identical records never straddle train/test. The selected records differ from
+  3.0's random-stream choice. `SanitizerConfig` now supports `sample` and `seed`.
 - **Non-English text is kept by default.** `--min-ascii-ratio` (and
   `SanitizerConfig.min_ascii_ratio`) now defaults to `0` (off) instead of `0.85`.
   Pass `--min-ascii-ratio 0.85` to keep the old English-only filtering. Word-based
@@ -37,11 +42,21 @@ detection-quality fixes.
 - **Malformed input lines now count in `malformed`.** This shifts how input positions
   are counted. Finish any `--resume` run that was started with 3.0 *before* upgrading.
 
+### Changed
+
+- **One engine for the CLI and the library.** `SanitizerConfig` (now in
+  `sanitizer_pro.settings`, still importable from `sanitizer_pro`) is the only
+  configuration type: it validates every setting, the CLI's flag defaults come from
+  it, and a CLI run builds one and drives the same `Sanitizer` the API uses
+  (`feed()` / `feed_transformed()` / `finish()`). Worker processes build a
+  `RecordTransformer` from the config. `core.sanitize_record` takes a
+  `SanitizerConfig` and returns a `Transformed` named tuple.
+
 ### Fixed
 
 - `--resume` after a hard crash (OOM-kill, SIGKILL) duplicated rows written after the
   last checkpoint. Checkpoints now record the durable output size and the SQLite dedup
-  high-water mark, plus the sampling RNG state. On resume the output is truncated and
+  high-water mark. On resume the output is truncated and
   the dedup DB rolled back to the checkpoint.
 - `--output x.json.gz` was written uncompressed.
 - CSV, Parquet and Excel outputs silently dropped fields that first appeared after

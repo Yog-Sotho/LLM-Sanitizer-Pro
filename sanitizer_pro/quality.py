@@ -1,8 +1,10 @@
 """Quality scoring, language detection, and content filtering."""
-import argparse
 import re
 import sys
-from typing import Any, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, List, Optional, Tuple
+
+if TYPE_CHECKING:
+    from sanitizer_pro.settings import SanitizerConfig
 
 try:
     from langdetect import detect_langs, DetectorFactory
@@ -51,7 +53,7 @@ def words_of(text: str) -> List[str]:
     return _WORD_RE.findall(text)
 
 
-def _check_quality_reason(text: str, args: argparse.Namespace) -> Optional[str]:
+def _check_quality_reason(text: str, args: 'SanitizerConfig') -> Optional[str]:
     if not text: return 'empty text'
     if len(text) < args.min_chars: return f'too short ({len(text)} < {args.min_chars})'
     if len(text) > args.max_chars: return f'too long ({len(text)} > {args.max_chars})'
@@ -63,16 +65,16 @@ def _check_quality_reason(text: str, args: argparse.Namespace) -> Optional[str]:
         ar = sum(1 for c in text if ord(c) < 128) / len(text)
         if ar < args.min_ascii_ratio: return f'low ASCII ratio ({ar:.3f})'
     
-    if getattr(args, 'reject_allcaps', False):
-        threshold = getattr(args, 'allcaps_min_len', 50)
-        min_alpha = getattr(args, 'allcaps_min_alpha', 10)
+    if args.reject_allcaps:
+        threshold = args.allcaps_min_len
+        min_alpha = args.allcaps_min_alpha
         if len(text) > threshold:
             alpha_chars = [c for c in text if c.isalpha()]
             if len(alpha_chars) >= min_alpha and (sum(1 for c in alpha_chars if c.isupper()) / len(alpha_chars) >= 0.9):
                 return 'all-caps'
     return None
 
-def is_high_quality(text: str, args: argparse.Namespace) -> bool:
+def is_high_quality(text: str, args: 'SanitizerConfig') -> bool:
     return _check_quality_reason(text, args) is None
 
 def detect_language(text: str, min_confidence: float = 0.0) -> Tuple[Optional[str], float]:

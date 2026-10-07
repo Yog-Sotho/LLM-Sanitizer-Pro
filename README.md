@@ -19,7 +19,7 @@ Production-grade, modular dataset sanitization, PII redaction, and curation pipe
 - **Quality & Content Filtering**: Length/word/uniqueness/ASCII gates, all-caps rejection, code detection, profanity filtering, language filtering with confidence gating, and pluggable Python quality scripts.
 - **Quality Scoring** (`--quality-min-score`, `--keep-top-percent`, `--quality-score-field`): every record gets a [0, 1] quality score — a dependency-free heuristic (C4/Gopher-style prose signals with a multiplicative repetition penalty) or causal-LM perplexity (`--quality-scorer perplexity`). Filter by absolute bar, keep only the best P%, or just annotate records for downstream sorting; score histogram and mean land in the stats file.
 - **Benchmark Decontamination**: n-gram overlap removal against eval test sets (`--decontaminate mmlu,gsm8k,humaneval,arc,hellaswag,truthfulqa,winogrande,mbpp`) — benchmarks are auto-downloaded from the Hugging Face Hub and cached, or supply your own reference files with `--decontam-refs`.
-- **Dataset Splitting & Sharding**: `--split train=0.9,val=0.05,test=0.05` or fixed-size shards with `--shard-size`.
+- **Dataset Splitting & Sharding**: `--split train=0.9,val=0.05,test=0.05` or fixed-size shards with `--shard-size`. Splits and `--sample` are decided by a hash of each record's content (salted by `--seed`), so a record always lands in the same split — across runs, resumes, and filter changes — and exact duplicates never straddle train and test.
 - **Crash-Safe I/O**: Atomic JSON writes (`.tmp` + `os.replace()`), safe HTML stripping via `html.parser`, structure-preserving text normalization (newlines kept for code/markdown data).
 - **Resumable Runs** (`--resume`): progress is checkpointed to `<output>.checkpoint.json` every `--checkpoint-interval` records; after a crash or Ctrl-C, rerun the same command and the pipeline skips already-processed input, restores statistics, pseudonym and sampling state, and appends to the output. Rows written after the last checkpoint by a hard crash (OOM-kill, SIGKILL) are truncated away and re-processed, so the result matches an uninterrupted run. Pair with `--dedup-backend sqlite --dedup-db-path` for dedup state that also survives the restart (rolled back to the checkpoint on resume).
 - **Parallel Processing**: `--jobs N` multiprocessing with accurate statistics.
@@ -160,10 +160,13 @@ with Sanitizer(config) as s:
     result.score       # quality score in [0, 1] when scoring is enabled
 ```
 
-`SanitizerConfig` mirrors the CLI flags with the same names and defaults.
-Dedup and pseudonym state persist across calls on one `Sanitizer` instance;
-`keep_top_percent` applies in `process()` (it needs the whole stream). Export
-pseudonym mappings with `s.export_pseudonym_map(path)`.
+`SanitizerConfig` is the single configuration object: the CLI flags have the
+same names, take their defaults from it, and a CLI run builds one and drives the
+very same `Sanitizer` engine — so library and command-line results are identical.
+Dedup and pseudonym state persist across calls on one `Sanitizer` instance.
+For streaming, `s.feed(record)` returns the records to write now and
+`s.finish()` releases the `keep_top_percent` buffer at the end (`process()`
+combines both). Export pseudonym mappings with `s.export_pseudonym_map(path)`.
 
 ## 🧪 Development
 

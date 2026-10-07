@@ -22,8 +22,6 @@ _STDIN = '-'
 _STDOUT = '-'
 _EXCEL_WARN_MB_DEFAULT = 100
 _MAX_DEPTH_DEFAULT = 100
-_ALLCAPS_MIN_LEN_DEFAULT = 50
-_ALLCAPS_MIN_ALPHA_DEFAULT = 10
 
 def smart_open(path: str, mode: str = 'r', encoding: str = 'utf-8') -> TextIO:
     """Open plain or gzip files, or return stdin/stdout."""

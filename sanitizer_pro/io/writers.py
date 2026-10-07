@@ -3,12 +3,12 @@ import csv
 import json
 import logging
 import os
-import random
 import sys
 import tempfile
 from pathlib import Path
 from typing import Any, Dict, Iterator, List, Optional
 
+from sanitizer_pro.sampling import content_fraction
 from sanitizer_pro.utils import ConfigurationError, smart_open, _STDOUT
 
 try:
@@ -420,17 +420,22 @@ def parse_split_spec(spec: str) -> Dict[str, float]:
 
 
 class SplitWriter:
-    """Randomly route records into named splits: out.jsonl → out.train.jsonl, out.val.jsonl, …"""
+    """Route records into named splits: out.jsonl → out.train.jsonl, out.val.jsonl, …
+
+    Assignment is by a salted hash of the record's content (see sampling.py),
+    so a record lands in the same split on every run — even when filters
+    upstream change — and identical records never straddle train and test."""
 
     def __init__(self, output_path: str, fmt: str, encoding: str = 'utf-8',
                  split_spec: Optional[Dict[str, float]] = None,
-                 txt_fallback_field: Optional[str] = None) -> None:
+                 txt_fallback_field: Optional[str] = None, seed: Optional[int] = None) -> None:
         if output_path == _STDOUT:
             raise ConfigurationError("--split cannot be used with stdout output.")
         if not split_spec:
             raise ConfigurationError("SplitWriter requires a split spec.")
         self.output_path, self.fmt, self.encoding = output_path, fmt, encoding
         self.txt_fallback_field = txt_fallback_field
+        self.seed = seed
         self._names: List[str] = list(split_spec.keys())
         self._cumulative: List[float] = []
         acc = 0.0
@@ -449,7 +454,7 @@ class SplitWriter:
         return self
 
     def write(self, record: Dict[str, Any]) -> None:
-        r = random.random()
+        r = content_fraction(record, self.seed, 'split')
         for name, edge in zip(self._names, self._cumulative):
             if r <= edge:
                 self._writers[name].write(record)
