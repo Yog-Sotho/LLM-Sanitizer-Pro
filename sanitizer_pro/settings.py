@@ -54,8 +54,10 @@ class SanitizerConfig:
     quality_script: Optional[str] = None  # path to a module defining quality_check(record)
 
     # Language
-    lang_filter: Optional[List[str]] = None
+    lang_filter: Optional[List[str]] = None   # ISO 639-1/-3 codes, e.g. ['en', 'zh']
     lang_confidence: float = 0.0
+    lang_backend: str = 'auto'                # auto | glotlid | openlid | langdetect
+    lang_model: Optional[str] = None          # local fastText model path override
 
     # Deduplication
     deduplicate: bool = False
@@ -138,11 +140,14 @@ class SanitizerConfig:
         _require(self.max_tokens is None or self.max_tokens >= 1, "max_tokens must be >= 1.")
         _require(self.decontam_ngram >= 2, "decontam_ngram must be >= 2.")
         _require(self.decontam_min_hits >= 1, "decontam_min_hits must be >= 1.")
+        from sanitizer_pro.langid import LANG_BACKENDS, language_backend_available
+        _require(self.lang_backend in LANG_BACKENDS,
+                 f"lang_backend must be one of {list(LANG_BACKENDS)}.")
         if self.lang_filter:
-            from sanitizer_pro.quality import LANGDETECT_AVAILABLE
-            _require(LANGDETECT_AVAILABLE,
-                     "lang_filter requires langdetect (pip install langdetect); "
-                     "without it every record would be filtered out.")
+            _require(language_backend_available(self.lang_backend),
+                     f"lang_filter needs a language-ID backend ({self.lang_backend}): "
+                     "pip install 'llm-sanitizer-pro[lang]' (GlotLID, fastText) or "
+                     "pip install langdetect; without one every record would be filtered out.")
 
     def warnings(self) -> List[str]:
         """Settings that are valid but have no effect."""

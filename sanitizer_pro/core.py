@@ -5,6 +5,8 @@ import json
 import re
 from typing import Any, Callable, Dict, List, NamedTuple, Optional, Set
 
+from sanitizer_pro.langid import LanguageIdentifier, make_language_identifier, normalize_filter
+from sanitizer_pro.langid import matches as lang_matches
 from sanitizer_pro.settings import FieldOps, PiiPattern, SanitizerConfig
 from sanitizer_pro.utils import FilterReason, _MAX_DEPTH_DEFAULT
 from sanitizer_pro.pii import clean_text, redact_pii, PseudoRegistry
@@ -121,6 +123,7 @@ def sanitize_record(
     ner_redactor: Optional[Any] = None,
     lang_filter: Optional[Set[str]] = None,
     quality_fn: Optional[Callable[[Dict[str, Any]], bool]] = None,
+    lang_identifier: Optional[LanguageIdentifier] = None,
 ) -> Transformed:
     """Clean, redact and gate one record (no cross-record state besides the
     optional pseudonym registry). Optional resources are normally supplied by
@@ -163,8 +166,11 @@ def sanitize_record(
 
     detected_lang: Optional[str] = None
     if lang_filter:
-        detected_lang, _conf = detect_language(quality_text, min_confidence=c.lang_confidence)
-        if detected_lang not in lang_filter:
+        if lang_identifier is not None:
+            detected_lang, conf = lang_identifier.predict(quality_text)
+        else:  # library callers without a transformer: langdetect, as before
+            detected_lang, conf = detect_language(quality_text)
+        if conf < c.lang_confidence or not lang_matches(detected_lang, lang_filter):
             return Transformed(None, FilterReason.LANGUAGE, '', None)
 
     # LLM Formatting
@@ -189,7 +195,10 @@ class RecordTransformer:
         self.truncator = TokenTruncator(config.max_tokens, config.tokenizer) \
             if config.max_tokens else None
         self.lang_filter: Optional[Set[str]] = \
-            {x.lower() for x in config.lang_filter} if config.lang_filter else None
+            normalize_filter(config.lang_filter) if config.lang_filter else None
+        self.lang_identifier: Optional[LanguageIdentifier] = \
+            make_language_identifier(config.lang_backend, config.lang_model) \
+            if self.lang_filter else None
         self.quality_fn: Optional[Callable[[Dict[str, Any]], bool]] = None
         if config.quality_script:
             from sanitizer_pro.config import load_quality_script
@@ -205,7 +214,7 @@ class RecordTransformer:
         return sanitize_record(
             record, self.config, pseudo_registry=pseudo_registry, pii_counters=pii_counters,
             truncator=self.truncator, ner_redactor=self.ner, lang_filter=self.lang_filter,
-            quality_fn=self.quality_fn)
+            quality_fn=self.quality_fn, lang_identifier=self.lang_identifier)
 
     def report_redactor(self) -> Optional[Callable[[Any], Any]]:
         c = self.config

@@ -36,6 +36,7 @@ from sanitizer_pro import __version__
 from sanitizer_pro.api import Sanitizer
 from sanitizer_pro.config import apply_config_to_args, collect_explicit_args, load_config_file
 from sanitizer_pro.io.readers import read_records
+from sanitizer_pro.langid import LANG_BACKENDS
 from sanitizer_pro.io.writers import ShardedWriter, SplitWriter, StreamingWriter, parse_split_spec
 from sanitizer_pro.pii import PseudoRegistry
 from sanitizer_pro.settings import DEFAULTS as D
@@ -151,8 +152,14 @@ def build_parser() -> argparse.ArgumentParser:
     qg.add_argument('--require-fields', default='')
     qg.add_argument('--quality-script', default=None, metavar='PATH')
     qg.add_argument('--max-depth', type=int, default=D.max_depth)
-    qg.add_argument('--lang-filter', default='')
+    qg.add_argument('--lang-filter', default='',
+                    help='Keep only these languages, e.g. en,zh or eng,cmn (ISO 639-1 or -3).')
     qg.add_argument('--lang-confidence', type=float, default=D.lang_confidence)
+    qg.add_argument('--lang-backend', default=D.lang_backend, choices=list(LANG_BACKENDS),
+                    help='Language ID for --lang-filter: glotlid (fastText, 2000+ varieties; '
+                         'default when fastText is installed), openlid, or langdetect.')
+    qg.add_argument('--lang-model', default=None, metavar='PATH',
+                    help='Local fastText language-ID model file (skips the Hub download).')
     qg.add_argument('--reject-code', action='store_true', help='Reject records detected as code snippets.')
     qg.add_argument('--reject-profanity', action='store_true', help='Reject records containing profanity.')
     qg.add_argument('--quality-scorer', default=D.quality_scorer, choices=list(QUALITY_SCORERS),
