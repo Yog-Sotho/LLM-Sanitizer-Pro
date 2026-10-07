@@ -260,6 +260,16 @@ class TestHardCrashResume:
         assert self._ids(out.read_text()) == list(range(1, self.N + 1))
         assert 'Deduplicated            : 0' in r2.stderr
 
+    def test_csv_output_survives_hard_crash(self, tmp_path):
+        import csv
+        inp, out = self._input(tmp_path), tmp_path / "out.csv"
+        crash, ok = self._scripts(tmp_path)
+        assert self._run(tmp_path, inp, out, crash).returncode == 9
+        r2 = self._run(tmp_path, inp, out, ok)
+        assert r2.returncode == 0, r2.stderr
+        ids = [int(r['id']) for r in csv.DictReader(out.open())]
+        assert ids == list(range(1, self.N + 1))
+
     def test_sampling_is_identical_to_an_uninterrupted_run(self, tmp_path):
         inp = self._input(tmp_path)
         crash, ok = self._scripts(tmp_path)

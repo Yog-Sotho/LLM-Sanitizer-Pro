@@ -822,7 +822,8 @@ def main() -> None:
         else:
             writer_ctx = StreamingWriter(args.output, output_fmt, args.encoding,
                                          txt_fallback_field=args.txt_fallback_field,
-                                         append=resume_stats is not None)
+                                         append=resume_stats is not None,
+                                         durable=args.resume)
             with writer_ctx as writer: _run(writer=writer)
         if args.resume:
             from sanitizer_pro.checkpoint import clear_checkpoint

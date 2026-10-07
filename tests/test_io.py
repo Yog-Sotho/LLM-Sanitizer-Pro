@@ -122,6 +122,124 @@ class TestStreamingWriter:
             StreamingWriter(str(tmp_path / "o.pdf"), '.pdf')
 
 
+HETERO = [
+    {"id": 1, "text": "first"},
+    {"id": 2, "text": "second", "extra": "late column"},
+    {"id": 3, "meta": {"src": "web", "n": 2}, "tags": ["a", "b"]},
+]
+
+
+def _no_temp_files(tmp_path):
+    return [p.name for p in tmp_path.iterdir() if p.name.startswith('.')] == []
+
+
+class TestColumnPreservation:
+    """Records with differing keys must not lose fields in tabular outputs."""
+
+    def test_json_gz_is_really_gzipped(self, tmp_path):
+        import gzip
+        out = tmp_path / "o.json.gz"
+        with StreamingWriter(str(out), '.json') as w:
+            w.write({"a": 1})
+        with gzip.open(out, 'rt') as fh:
+            assert json.load(fh) == [{"a": 1}]
+        assert _no_temp_files(tmp_path)
+
+    def test_csv_union_header_and_json_nested(self, tmp_path):
+        import csv
+        out = tmp_path / "o.csv"
+        with StreamingWriter(str(out), '.csv') as w:
+            for r in HETERO:
+                w.write(r)
+        rows = list(csv.DictReader(out.open()))
+        assert list(rows[0]) == ["id", "text", "extra", "meta", "tags"]
+        assert rows[1]["extra"] == "late column"
+        assert json.loads(rows[2]["meta"]) == {"src": "web", "n": 2}
+        assert json.loads(rows[2]["tags"]) == ["a", "b"]
+        assert rows[0]["extra"] == ""
+        assert _no_temp_files(tmp_path)
+
+    def test_csv_gz(self, tmp_path):
+        import csv
+        import gzip
+        out = tmp_path / "o.csv.gz"
+        with StreamingWriter(str(out), '.csv') as w:
+            for r in HETERO:
+                w.write(r)
+        with gzip.open(out, 'rt') as fh:
+            assert len(list(csv.DictReader(fh))) == 3
+
+    def test_csv_durable_mode_warns_about_dropped_columns(self, tmp_path, caplog):
+        out = tmp_path / "o.csv"
+        with StreamingWriter(str(out), '.csv', durable=True) as w:
+            for r in HETERO:
+                w.write(r)
+            assert w.dropped_columns == {"extra": 1, "meta": 1, "tags": 1}
+        assert "'extra' is not in the header" in caplog.text
+
+    def test_staged_output_absent_on_error(self, tmp_path):
+        out = tmp_path / "o.csv"
+        with pytest.raises(RuntimeError):
+            with StreamingWriter(str(out), '.csv') as w:
+                w.write({"a": 1})
+                raise RuntimeError("boom")
+        assert not out.exists() and _no_temp_files(tmp_path)
+
+    def test_empty_csv(self, tmp_path):
+        out = tmp_path / "o.csv"
+        with StreamingWriter(str(out), '.csv'):
+            pass
+        assert out.read_text() == ""
+
+    @pytest.mark.parametrize("batch", [50_000, 1])  # 1 → unify across many batches
+    def test_parquet_union_and_promotion(self, tmp_path, monkeypatch, batch):
+        pq = pytest.importorskip("pyarrow.parquet")
+        import sanitizer_pro.io.writers as writers
+        monkeypatch.setattr(writers, '_PARQUET_BATCH', batch)
+        out = tmp_path / "o.parquet"
+        with StreamingWriter(str(out), '.parquet') as w:
+            w.write({"id": 1, "score": 1})
+            w.write({"id": 2, "score": 2.5, "extra": "x", "meta": {"a": 1}})
+            w.write({"id": 3, "meta": {"b": "y"}})
+        rows = pq.read_table(out).to_pylist()
+        assert [r["extra"] for r in rows] == [None, "x", None]
+        assert [r["score"] for r in rows] == [1.0, 2.5, None]
+        assert rows[1]["meta"] == {"a": 1, "b": None} and rows[2]["meta"] == {"a": None, "b": "y"}
+        assert _no_temp_files(tmp_path)
+
+    @pytest.mark.parametrize("batch", [50_000, 1])
+    def test_parquet_mixed_types_become_strings(self, tmp_path, monkeypatch, batch):
+        pq = pytest.importorskip("pyarrow.parquet")
+        import sanitizer_pro.io.writers as writers
+        monkeypatch.setattr(writers, '_PARQUET_BATCH', batch)
+        out = tmp_path / "o.parquet"
+        with StreamingWriter(str(out), '.parquet') as w:
+            w.write({"v": 1, "ok": 1})
+            w.write({"v": "two", "ok": 2})
+        rows = pq.read_table(out).to_pylist()
+        assert [r["v"] for r in rows] == ["1", "two"]
+        assert [r["ok"] for r in rows] == [1, 2]
+
+    def test_parquet_empty(self, tmp_path):
+        pq = pytest.importorskip("pyarrow.parquet")
+        out = tmp_path / "o.parquet"
+        with StreamingWriter(str(out), '.parquet'):
+            pass
+        assert pq.read_table(out).num_rows == 0
+
+    def test_excel_union_header(self, tmp_path):
+        pytest.importorskip("xlsxwriter")
+        pd = pytest.importorskip("pandas")
+        pytest.importorskip("openpyxl")
+        out = tmp_path / "o.xlsx"
+        with StreamingWriter(str(out), '.xlsx') as w:
+            for r in HETERO:
+                w.write(r)
+        df = pd.read_excel(out)
+        assert list(df.columns) == ["id", "text", "extra", "meta", "tags"]
+        assert df["extra"][1] == "late column"
+
+
 class TestShardedWriter:
     def test_shards(self, tmp_path):
         out = str(tmp_path / "out.jsonl")
