@@ -36,6 +36,7 @@ from sanitizer_pro import __version__
 from sanitizer_pro.api import Sanitizer
 from sanitizer_pro.config import apply_config_to_args, collect_explicit_args, load_config_file
 from sanitizer_pro.io.readers import read_records
+from sanitizer_pro.langid import LANG_BACKENDS
 from sanitizer_pro.io.writers import ShardedWriter, SplitWriter, StreamingWriter, parse_split_spec
 from sanitizer_pro.pii import PseudoRegistry
 from sanitizer_pro.settings import DEFAULTS as D
@@ -151,15 +152,30 @@ def build_parser() -> argparse.ArgumentParser:
     qg.add_argument('--require-fields', default='')
     qg.add_argument('--quality-script', default=None, metavar='PATH')
     qg.add_argument('--max-depth', type=int, default=D.max_depth)
-    qg.add_argument('--lang-filter', default='')
+    qg.add_argument('--lang-filter', default='',
+                    help='Keep only these languages, e.g. en,zh or eng,cmn (ISO 639-1 or -3).')
     qg.add_argument('--lang-confidence', type=float, default=D.lang_confidence)
+    qg.add_argument('--lang-backend', default=D.lang_backend, choices=list(LANG_BACKENDS),
+                    help='Language ID for --lang-filter: glotlid (fastText, 2000+ varieties; '
+                         'default when fastText is installed), openlid, or langdetect.')
+    qg.add_argument('--lang-model', default=None, metavar='PATH',
+                    help='Local fastText language-ID model file (skips the Hub download).')
     qg.add_argument('--reject-code', action='store_true', help='Reject records detected as code snippets.')
     qg.add_argument('--reject-profanity', action='store_true', help='Reject records containing profanity.')
     qg.add_argument('--quality-scorer', default=D.quality_scorer, choices=list(QUALITY_SCORERS),
                     help='Scoring backend for --quality-min-score / --keep-top-percent / '
-                         '--quality-score-field (default: heuristic, no dependencies).')
+                         '--quality-score-field: heuristic (default, no dependencies), '
+                         'perplexity, fineweb-edu (classifier, 0-5 mapped to 0-1), dclm '
+                         '(fastText, P(high quality)), or fasttext (your own model).')
     qg.add_argument('--quality-model', default=None, metavar='NAME',
-                    help='Causal LM for the perplexity scorer (default: distilgpt2).')
+                    help='Model for the scorer: causal LM for perplexity (default distilgpt2), '
+                         'HF model for fineweb-edu, or a fastText .bin for fasttext.')
+    qg.add_argument('--quality-label', default=None, metavar='LABEL',
+                    help="Positive label of a --quality-scorer fasttext model (e.g. __label__hq).")
+    qg.add_argument('--quality-rules', default='', metavar='SETS',
+                    help='Reject documents failing published pretraining rules: gopher, '
+                         'gopher-repetition, c4, fineweb (comma-separated, or all). '
+                         'English-tuned; thresholds as in datatrove.')
     qg.add_argument('--quality-min-score', type=float, default=None, metavar='X',
                     help='Reject records with quality score < X (scores are in [0, 1]).')
     qg.add_argument('--keep-top-percent', type=float, default=None, metavar='P',
@@ -195,7 +211,11 @@ def build_parser() -> argparse.ArgumentParser:
                          'Requires spacy (+en_core_web_sm) or transformers.')
     fg.add_argument('--pii-ner-backend', default=D.pii_ner_backend, choices=list(NER_BACKENDS))
     fg.add_argument('--pii-ner-entities', default='person', metavar='KINDS',
-                    help='Comma-separated entity kinds to redact: person,location,org (default: person).')
+                    help='Comma-separated entity kinds to redact (default: person): person, '
+                         'location, org; with --pii-ner-backend gliner also address, '
+                         'date_of_birth, id_number, financial, username, credential; or all.')
+    fg.add_argument('--pii-ner-threshold', type=float, default=D.pii_ner_threshold,
+                    metavar='T', help='GLiNER confidence threshold (default 0.5).')
     fg.add_argument('--pii-ner-model', default=None, metavar='NAME',
                     help='Override the NER model (spaCy model name or HF model id).')
     fg.add_argument('--redact-secrets', action='store_true',
@@ -236,17 +256,22 @@ def build_parser() -> argparse.ArgumentParser:
     # Chat validation
     cg = parser.add_argument_group('Chat Dataset Validation')
     cg.add_argument('--validate-chat', action='store_true',
-                    help='Reject records whose "messages" structure is invalid for chat '
-                         'fine-tuning (role alternation, empty turns, no assistant reply, …). '
-                         'Combine with --format-chatml to convert first, then validate.')
+                    help='Reject records whose conversation is invalid for chat fine-tuning '
+                         '(role alternation, empty turns, no assistant reply, malformed tool '
+                         'calls, unanswered or orphan tool results, …). Reads OpenAI '
+                         '"messages" (incl. content parts and tool_calls) and ShareGPT '
+                         '"conversations". Combine with --format-chatml to convert first.')
     cg.add_argument('--chat-lenient', action='store_true',
-                    help='Only structural checks (schema, known roles, non-empty content, '
-                         'assistant present); skip ordering/alternation rules.')
+                    help='Only structural and tool-call checks (schema, known roles, '
+                         'non-empty content, assistant present, tool links); skip '
+                         'ordering/alternation rules.')
     cg.add_argument('--chat-max-tokens', type=int, default=None, metavar='N',
-                    help='Reject conversations whose total content exceeds N tokens '
-                         '(counted with --tokenizer).')
+                    help='Reject conversations longer than N tokens, counted with '
+                         "--tokenizer through its chat template when it has one (role "
+                         'markup included), else over message contents.')
     cg.add_argument('--chat-roles', default='system,user,assistant', metavar='ROLES',
-                    help='Comma-separated allowed roles (default: system,user,assistant).')
+                    help='Comma-separated allowed roles (default: system,user,assistant; '
+                         'add tool for tool-use data).')
 
     # CSV / Excel
     iog = parser.add_argument_group('CSV / Excel Options')
@@ -345,9 +370,12 @@ def _print_info_and_exit(args: argparse.Namespace, parser: argparse.ArgumentPars
             print(json.dumps(template, indent=2))
         sys.exit(0)
     if args.decontaminate and args.decontaminate.strip().lower() == 'list':
-        from sanitizer_pro.decontam import KNOWN_BENCHMARKS
+        from sanitizer_pro.decontam import BENCHMARK_GROUPS, KNOWN_BENCHMARKS
         for name, spec in sorted(KNOWN_BENCHMARKS.items()):
-            print(f"{name:<12} {spec.repo:<40} {spec.note}")
+            print(f"{name:<15} {spec.repo:<36} {spec.note}")
+        for group, members in BENCHMARK_GROUPS.items():
+            print(f"{group:<15} (group) {', '.join(members)}")
+        print("all             (every benchmark not marked gated; gated ones need HF_TOKEN)")
         sys.exit(0)
     if args.profile is not None:
         from sanitizer_pro.profiles import PROFILE_NAMES, describe_profiles
@@ -600,6 +628,7 @@ def _print_summary(args: argparse.Namespace, stats: RunStats) -> None:
     rows = [
         ("Total records processed", total), ("Kept", None),
         ("Filtered (quality)", stats.filtered_quality),
+        ("Filtered (rules)", stats.filtered_rules),
         ("Filtered (language)", stats.filtered_lang),
         ("Filtered (require)", stats.filtered_require),
         ("Filtered (code)", stats.filtered_code),
@@ -614,6 +643,14 @@ def _print_summary(args: argparse.Namespace, stats: RunStats) -> None:
     for label, value in rows:
         shown = f"{stats.kept:,}  ({kept_pct:.2f}%)" if value is None else f"{value:,}"
         lines.append(f"{label:<24}: {shown}")
+    if stats.contaminated_by:
+        top = ', '.join(f"{k}={v}" for k, v in sorted(
+            stats.contaminated_by.items(), key=lambda x: -x[1])[:8])
+        lines.append(f"  contamination by benchmark: {top}")
+    if stats.rule_failures:
+        top = ', '.join(f"{k}={v}" for k, v in sorted(
+            stats.rule_failures.items(), key=lambda x: -x[1])[:5])
+        lines.append(f"  rule failures: {top}")
     if stats.chat_invalid_reasons:
         top = ', '.join(f"{k}={v}" for k, v in sorted(
             stats.chat_invalid_reasons.items(), key=lambda x: -x[1])[:5])
@@ -648,7 +685,8 @@ def _write_artifacts(args: argparse.Namespace, config: SanitizerConfig, plan: IO
         (bool(c.decontaminate or c.decontam_refs),
          'decontamination' + (f" ({','.join(c.decontaminate)})" if c.decontaminate else '')),
         (c.validate_chat, 'chat validation'),
-        (sanitizer._scorer is not None, f'quality scoring ({c.quality_scorer})'),
+        (sanitizer.transformer.scorer is not None, f'quality scoring ({c.quality_scorer})'),
+        (bool(c.quality_rules), f"quality rules ({','.join(c.quality_rules or [])})"),
         (c.clean_html, 'HTML stripping'),
         (bool(c.lang_filter), f"language filter ({','.join(c.lang_filter or [])})"),
     ] if enabled]

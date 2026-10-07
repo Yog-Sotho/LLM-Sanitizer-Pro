@@ -104,18 +104,16 @@ class Sanitizer:
 
         self._chat_validator: Optional[Any] = None
         if c.validate_chat:
-            from sanitizer_pro.chat import ChatValidator, make_token_counter
+            from sanitizer_pro.chat import ChatValidator, make_counters
+            text_counter, conversation_counter = (
+                make_counters(c.tokenizer) if c.chat_max_tokens else (None, None))
             self._chat_validator = ChatValidator(
                 allowed_roles=c.chat_roles, lenient=c.chat_lenient,
-                max_tokens=c.chat_max_tokens,
-                token_counter=make_token_counter(c.tokenizer) if c.chat_max_tokens else None)
+                max_tokens=c.chat_max_tokens, token_counter=text_counter,
+                conversation_counter=conversation_counter)
 
-        self._scorer: Optional[Any] = None
-        if (c.quality_min_score is not None or c.keep_top_percent is not None
-                or c.quality_score_field):
-            from sanitizer_pro.scoring import make_scorer
-            self._scorer = make_scorer(c.quality_scorer, model=c.quality_model)
-            logging.info(f"Quality scorer ready: {self._scorer.backend_name}")
+        if self.transformer.scorer is not None:
+            logging.info(f"Quality scorer ready: {self.transformer.scorer.backend_name}")
 
         self._topk: Optional[List[Survivor]] = None
         if c.keep_top_percent is not None:
@@ -155,12 +153,15 @@ class Sanitizer:
         if t.record is None:
             reason = (t.reason.value if t.reason is not None else 'quality')
             counter = {'language': 'filtered_lang', 'require_fields': 'filtered_require',
-                       'code': 'filtered_code', 'profanity': 'filtered_profanity'}
+                       'code': 'filtered_code', 'profanity': 'filtered_profanity',
+                       'rules': 'filtered_rules'}
             attr = counter.get(reason, 'filtered_quality')
             setattr(stats, attr, getattr(stats, attr) + 1)
+            if t.detail and reason == 'rules':
+                stats.rule_failures[t.detail] = stats.rule_failures.get(t.detail, 0) + 1
             if original is not None:
                 self.audit_samples.add_dropped(reason, original)
-            return ProcessResult(None, False, reason)
+            return ProcessResult(None, False, f'rules:{t.detail}' if t.detail else reason)
         sanitized = t.record
 
         if self._chat_validator is not None:
@@ -173,15 +174,16 @@ class Sanitizer:
                 self.audit_samples.add_dropped('chat', sanitized, redacted=True)
                 return ProcessResult(None, False, f'chat:{chat_reason}')
 
-        if self._contamination is not None and self._contamination.is_contaminated(
-                full_text_for_decontam(sanitized)):
+        bench = self._contamination.match(full_text_for_decontam(sanitized)) \
+            if self._contamination is not None else None
+        if bench is not None:
             stats.filtered_contaminated += 1
+            stats.contaminated_by[bench] = stats.contaminated_by.get(bench, 0) + 1
             self.audit_samples.add_dropped('contaminated', sanitized, redacted=True)
             return ProcessResult(None, False, 'contaminated')
 
-        score: Optional[float] = None
-        if self._scorer is not None:
-            score = self._scorer.score(t.quality_text)
+        score = t.score
+        if score is not None:
             if c.quality_min_score is not None and score < c.quality_min_score:
                 stats.filtered_low_score += 1
                 self.audit_samples.add_dropped('low_score', sanitized, redacted=True)

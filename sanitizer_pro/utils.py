@@ -11,6 +11,7 @@ class FilterReason(enum.Enum):
     REQUIRE = 'require_fields'
     PROFANITY = 'profanity'
     CODE = 'code'
+    RULES = 'rules'
 
 class ConfigurationError(ValueError):
     """Raised for invalid CLI arguments or config files."""

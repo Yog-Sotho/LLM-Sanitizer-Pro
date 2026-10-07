@@ -16,6 +16,7 @@ _SAMPLE_TRUNCATE = 400
 _REASON_LABELS = {
     'malformed': 'Malformed (not a JSON object)',
     'quality': 'Quality gates (length / words / ratios)',
+    'rules': 'Quality rules (Gopher / C4 / FineWeb)',
     'language': 'Language filter',
     'require_fields': 'Missing required fields',
     'code': 'Code detection',
@@ -32,6 +33,9 @@ _PII_LABELS = {
     'ssn': 'SSNs', 'iban': 'IBANs', 'ip': 'IP addresses', 'url': 'URLs',
     'custom': 'Custom patterns',
     'person': 'Person names (NER)', 'location': 'Locations (NER)', 'org': 'Organizations (NER)',
+    'address': 'Addresses (NER)', 'date_of_birth': 'Dates of birth (NER)',
+    'id_number': 'ID numbers (NER)', 'financial': 'Financial accounts (NER)',
+    'username': 'Usernames (NER)', 'credential': 'Credentials (NER)',
     'private_key': 'Private keys', 'aws_access_key': 'AWS access keys',
     'github_token': 'GitHub tokens', 'openai_key': 'OpenAI keys',
     'anthropic_key': 'Anthropic keys', 'google_api_key': 'Google API keys',
@@ -147,6 +151,7 @@ def _drop_items(stats: Dict[str, Any]) -> List[Tuple[str, int]]:
     mapping = [
         ('malformed', stats.get('malformed', 0)),
         ('quality', stats.get('filtered_quality', 0)),
+        ('rules', stats.get('filtered_rules', 0)),
         ('language', stats.get('filtered_language', 0)),
         ('require_fields', stats.get('filtered_require', 0)),
         ('code', stats.get('filtered_code', 0)),
@@ -203,6 +208,20 @@ def generate_report_html(
         sections.append(f"""
         <section><h2>Chat validation failures</h2>
         {_bar_rows(items, stats.get('filtered_chat_invalid', 0), '--series-1')}</section>""")
+
+    contaminated_by = stats.get('contaminated_by') or {}
+    if contaminated_by:
+        items = list(contaminated_by.items())
+        sections.append(f"""
+        <section><h2>Benchmark contamination by source</h2>
+        {_bar_rows(items, stats.get('filtered_contaminated', 0), '--series-2')}</section>""")
+
+    rule_failures = stats.get('rule_failures') or {}
+    if rule_failures:
+        items = list(rule_failures.items())[:15]
+        sections.append(f"""
+        <section><h2>Quality rule failures</h2>
+        {_bar_rows(items, stats.get('filtered_rules', 0), '--series-1')}</section>""")
 
     score_hist = stats.get('quality_score_histogram') or {}
     if score_hist:

@@ -19,7 +19,7 @@ Two backends:
     log-linearly onto [0, 1] (perplexity 10 → 1.0, 10 000 → 0.0).
 """
 import math
-from typing import Callable, List, Optional, Protocol
+from typing import Any, Callable, List, Optional, Protocol
 
 from sanitizer_pro.utils import ConfigurationError
 
@@ -143,15 +143,118 @@ class PerplexityScorer:
         return perplexity_to_score(self._ppl(text))
 
 
+class FineWebEduScorer:
+    """Educational value from the FineWeb-Edu classifier (Snowflake-arctic-embed
+    regression head, Apache-2.0), the model used to build FineWeb-Edu. Its raw
+    0-5 score is mapped to [0, 1] as score / 5, so the authors' recommended
+    cut of int_score >= 3 is roughly --quality-min-score 0.5 (2.5 rounds to 3)."""
+
+    backend_name = 'fineweb-edu'
+    DEFAULT_MODEL = 'HuggingFaceFW/fineweb-edu-classifier'
+
+    def __init__(self, model: Optional[str] = None, max_length: int = 512,
+                 _score_fn: Optional[Callable[[str], float]] = None) -> None:
+        if _score_fn is not None:
+            self._raw = _score_fn
+            return
+        try:
+            import torch
+            from transformers import AutoModelForSequenceClassification, AutoTokenizer
+        except ImportError:
+            raise ImportError("--quality-scorer fineweb-edu needs: "
+                              "pip install 'llm-sanitizer-pro[quality]'") from None
+        name = model or self.DEFAULT_MODEL
+        tok = AutoTokenizer.from_pretrained(name)
+        net = AutoModelForSequenceClassification.from_pretrained(name)
+        net.eval()
+
+        def _raw(text: str) -> float:
+            inputs = tok(text, return_tensors='pt', truncation=True, max_length=max_length)
+            with torch.no_grad():
+                return float(net(**inputs).logits.squeeze(-1).float().item())
+
+        self._raw = _raw
+
+    def raw_score(self, text: str) -> float:
+        """The classifier's native 0-5 educational score (unclamped)."""
+        return self._raw(text)
+
+    def score(self, text: str) -> float:
+        if not text.strip():
+            return 0.0
+        return round(max(0.0, min(self._raw(text), 5.0)) / 5.0, 4)
+
+
+# Named fastText quality classifiers: (repo, file, positive label).
+FASTTEXT_SCORERS = {
+    # DCLM-Baseline filter (MIT): OpenHermes-2.5 + Reddit ELI5 vs RefinedWeb.
+    'dclm': ('mlfoundations/fasttext-oh-eli5',
+             'openhermes_reddit_eli5_vs_rw_v2_bigram_200k_train.bin', '__label__hq'),
+}
+
+
+class FastTextScorer:
+    """Probability of a 'high quality' label from a fastText classifier: the
+    DCLM filter (--quality-scorer dclm) or any model file (--quality-scorer
+    fasttext --quality-model PATH --quality-label __label__X)."""
+
+    def __init__(self, name: str = 'dclm', model: Optional[str] = None,
+                 label: Optional[str] = None, _model: Optional[Any] = None) -> None:
+        self.backend_name = name
+        preset = FASTTEXT_SCORERS.get(name)
+        self.label = label or (preset[2] if preset else None)
+        if not self.label:
+            raise ConfigurationError("--quality-scorer fasttext needs --quality-label "
+                                     "(the classifier's positive label, e.g. __label__hq).")
+        if not self.label.startswith('__label__'):
+            self.label = '__label__' + self.label
+        if _model is not None:
+            self._model = _model
+            return
+        if preset is None and not model:
+            raise ConfigurationError("--quality-scorer fasttext needs --quality-model PATH.")
+        try:
+            import fasttext
+        except ImportError:
+            raise ImportError(f"--quality-scorer {name} needs fastText: "
+                              "pip install 'llm-sanitizer-pro[lang]'") from None
+        if model:
+            path = model
+        else:
+            assert preset is not None
+            from sanitizer_pro.hub import resolve_model_file
+            path = str(resolve_model_file(preset[0], preset[1]))
+        self._model = fasttext.load_model(path)
+
+    def score(self, text: str) -> float:
+        line = ' '.join(text.split())  # fastText predicts on a single line
+        if not line:
+            return 0.0
+        labels, probs = self._model.predict(line, k=-1)
+        for lab, p in zip(labels, probs):
+            if lab == self.label:
+                return round(min(1.0, float(p)), 4)
+        return 0.0
+
+
 class Scorer(Protocol):
     backend_name: str
 
     def score(self, text: str) -> float: ...
 
 
-def make_scorer(backend: str = 'heuristic', model: Optional[str] = None) -> Scorer:
+SCORER_BACKENDS = ('heuristic', 'perplexity', 'fineweb-edu', 'dclm', 'fasttext')
+
+
+def make_scorer(backend: str = 'heuristic', model: Optional[str] = None,
+                label: Optional[str] = None) -> Scorer:
     if backend == 'heuristic':
         return HeuristicScorer()
     if backend == 'perplexity':
         return PerplexityScorer(model=model)
-    raise ConfigurationError(f"Unknown quality scorer '{backend}' (heuristic|perplexity).")
+    if backend == 'fineweb-edu':
+        return FineWebEduScorer(model=model)
+    if backend in ('dclm', 'fasttext'):
+        return FastTextScorer(backend, model=model, label=label)
+    raise ConfigurationError(
+        f"Unknown quality scorer '{backend}' ({'|'.join(SCORER_BACKENDS)}).")

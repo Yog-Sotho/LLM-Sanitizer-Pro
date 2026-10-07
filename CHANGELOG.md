@@ -2,8 +2,8 @@
 
 ## Unreleased (planned 4.0.0)
 
-Phases 1–2 of the audit plan (`docs/AUDIT_2026-10.md`): data-integrity, privacy and
-detection-quality fixes, then one shared pipeline engine.
+Phases 1–3 of the audit plan (`docs/AUDIT_2026-10.md`): data-integrity, privacy and
+detection-quality fixes, one shared pipeline engine, then current detection backends.
 
 ### Behavior changes: read before upgrading
 
@@ -39,8 +39,49 @@ detection-quality fixes, then one shared pipeline engine.
 - **Pseudonymized IPs are valid `10.x.y.z` addresses** (previously `0.0.0.N`).
 - **Ctrl-C under `--resume` no longer writes a checkpoint.** The last periodic
   checkpoint is the restart point.
+- **`--decontaminate all` means every *ungated* benchmark** (20 of the 22 now in the
+  registry). Gated sets (`gpqa`, `hle`) must be named, with `HF_TOKEN` set.
+- **`--validate-chat` reads more formats.** Records with ShareGPT `conversations`, content
+  parts or `tool_calls` used to fail as `missing_messages` / `bad_message_schema`;
+  they are now validated. A `tool` turn that follows a structured tool call must
+  answer it (`orphan_tool_result`, `unanswered_tool_call`).
 - **Malformed input lines now count in `malformed`.** This shifts how input positions
   are counted. Finish any `--resume` run that was started with 3.0 *before* upgrading.
+
+### Added
+
+- **Language identification with GlotLID and OpenLID-v2** (`--lang-backend`,
+  `--lang-model`; `pip install 'llm-sanitizer-pro[lang]'`). These are the fastText LID
+  models behind FineWeb-2, with 2,000+ and ~200 varieties. `auto` prefers GlotLID and
+  falls back to langdetect. `--lang-filter` accepts ISO 639-1, 639-3 or
+  `code_Script` labels, so `en,zh` matches `eng_Latn` and `cmn_Hani`.
+- **Pretraining rule filters** (`--quality-rules gopher,gopher-repetition,c4,fineweb`
+  or `all`). These are dependency-free versions of the Gopher, C4 and FineWeb
+  heuristics, using datatrove's thresholds and reason names. On 3,000 documents
+  they agree with datatrove 0.10.1 on 98–100% of keep/drop decisions. Rejections
+  are counted per rule in the summary, stats file and report.
+- **Classifier quality scorers.** `--quality-scorer fineweb-edu` uses the FineWeb-Edu
+  educational-value classifier. `dclm` uses the DCLM fastText classifier, and
+  `fasttext` takes any fastText model with `--quality-model` and `--quality-label`.
+- **GLiNER2 PII detection** (`--pii-ner-backend gliner`, `[gliner]` extra). It finds
+  person, location, address, date of birth, ID and financial numbers, usernames and
+  credentials in many languages. `--pii-ner-threshold` sets the cut-off.
+- **PII accuracy harness.** `python -m sanitizer_pro.evaluation` reports span-level
+  precision/recall/F1 per kind on a bundled 600-record synthetic set (919 spans, 200
+  hard negatives) or your own labeled JSONL. Regex detectors score P = R = 1.0 on it;
+  regex + GLiNER2 scores micro F1 0.92 with exact spans and 0.96 with overlap.
+- **Decontamination covers current benchmarks.** New: MMLU-Pro, GPQA, MATH, MATH-500,
+  AIME 2024/2025, IFEval, BBH, MuSR, HLE, SimpleQA, HumanEval+, MBPP+, GSM-Plus, plus
+  the `open-llm-v2` group. Answer and choice fields are indexed alongside questions.
+  Hits are attributed to the benchmark (`contaminated_by` in stats and report). The
+  n-gram index stores hashes, so all 20 ungated benchmarks fit in ~300 MB.
+- **Chat validation for tool-use, multimodal and ShareGPT data.**
+  - Checks OpenAI `tool_calls`: a function name and JSON `arguments`.
+  - Links tool results to their calls by `tool_call_id`.
+  - Accepts content-part lists, including image-only turns.
+  - `--format-chatml` converts ShareGPT `conversations`.
+  - With an HF `--tokenizer` that has a chat template, `--chat-max-tokens` counts the
+    rendered conversation.
 
 ### Changed
 
@@ -51,6 +92,7 @@ detection-quality fixes, then one shared pipeline engine.
   (`feed()` / `feed_transformed()` / `finish()`). Worker processes build a
   `RecordTransformer` from the config. `core.sanitize_record` takes a
   `SanitizerConfig` and returns a `Transformed` named tuple.
+- **Quality scoring runs in the per-record stage**, so `--jobs` parallelizes it.
 - **The version has one source**, `sanitizer_pro.__version__`. `pyproject.toml`
   reads it, and so do the run summary, the stats file and the report. New
   `--version` flag.
@@ -58,6 +100,10 @@ detection-quality fixes, then one shared pipeline engine.
 
 ### Fixed
 
+- International phone numbers with more than four digit groups
+  (`+33 1 42 68 53 07`) were only partly redacted.
+- NER detectors could return overlapping spans for the same text, which mangled
+  redaction.
 - `--resume` after a hard crash (OOM-kill, SIGKILL) duplicated rows written after the
   last checkpoint. Checkpoints now record the durable output size and the SQLite dedup
   high-water mark. On resume the output is truncated and

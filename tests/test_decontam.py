@@ -90,7 +90,9 @@ class TestBenchmarkRegistry:
         assert resolve_benchmark_names("mmlu, gsm8k") == ['mmlu', 'gsm8k']
 
     def test_resolve_all(self):
-        assert set(resolve_benchmark_names("all")) == set(KNOWN_BENCHMARKS)
+        names = set(resolve_benchmark_names("all"))
+        assert names == {n for n, b in KNOWN_BENCHMARKS.items() if not b.gated}
+        assert 'gpqa' not in names and 'mmlu-pro' in names   # gated ones must be named
 
     def test_resolve_unknown(self):
         with pytest.raises(ConfigurationError, match="Unknown benchmark"):
@@ -127,3 +129,83 @@ class TestReferenceFiles:
         p.write_text("")
         with pytest.raises(ConfigurationError, match="no reference texts"):
             build_index(ref_files=[str(p)])
+
+
+class TestAttributionAndRegistry:
+    def test_match_reports_source(self):
+        idx = NGramIndex(n=8)
+        idx.add_reference(BENCH_Q, source='gsm8k')
+        idx.add_reference("Which of the following best describes the structure that "
+                          "collects light in a telescope?", source='arc')
+        assert idx.match(f"Q: {BENCH_Q}") == 'gsm8k'
+        assert idx.match("which of the following best describes the structure that "
+                         "collects light in a telescope") == 'arc'
+        assert idx.match("an unrelated sentence about cooking pasta for dinner tonight") is None
+        assert idx.ref_counts == {'gsm8k': 1, 'arc': 1}
+
+    def test_short_reference_attributed(self):
+        idx = NGramIndex(n=8)
+        idx.add_reference("name the capital of france", source='simpleqa')
+        assert idx.match("Quiz: name the capital of France, please.") == 'simpleqa'
+
+    def test_groups_and_gating(self):
+        assert resolve_benchmark_names('open-llm-v2') == \
+            ['ifeval', 'bbh', 'math', 'gpqa', 'musr', 'mmlu-pro']
+        assert resolve_benchmark_names('gsm8k,open-llm-v2,gsm8k').count('gsm8k') == 1
+        assert KNOWN_BENCHMARKS['gpqa'].gated and KNOWN_BENCHMARKS['hle'].gated
+
+    def test_gated_error_message(self, monkeypatch):
+        import sanitizer_pro.hub as hub
+        from sanitizer_pro.decontam import iter_benchmark_texts
+
+        def denied(*a, **k):
+            raise ConfigurationError("Could not list parquet files: HTTP Error 401: Unauthorized")
+            yield  # pragma: no cover
+        monkeypatch.setattr(hub, 'iter_parquet_texts', denied)
+        with pytest.raises(ConfigurationError, match="gated.*HF_TOKEN"):
+            list(iter_benchmark_texts('gpqa'))
+
+
+class TestParquetFieldExtraction:
+    @pytest.fixture
+    def shards(self, tmp_path, monkeypatch):
+        pa = pytest.importorskip("pyarrow")
+        pq = pytest.importorskip("pyarrow.parquet")
+        import sanitizer_pro.hub as hub
+        files = {}
+        for cfg in ('algebra', 'geometry'):
+            path = tmp_path / f"{cfg}.parquet"
+            pq.write_table(pa.Table.from_pylist([{
+                "question": f"{cfg} question text with several words here",
+                "options": ["first option with many words", "second option with many words"],
+                "choices": {"text": ["nested choice text with words"], "label": ["A"]},
+            }]), path)
+            files[cfg] = path
+        monkeypatch.setattr(hub, 'list_parquet', lambda repo: {c: {'test': ['u']} for c in files})
+        monkeypatch.setattr(hub, 'download_parquet',
+                            lambda ref, cache_dir=None, cache_ns=None: [files[ref.config]])
+        return hub
+
+    def test_lists_dotted_paths_and_wildcard_configs(self, shards):
+        texts = list(shards.iter_parquet_texts('o/n', (('*', 'test'),),
+                                               ('question', 'options', 'choices.text')))
+        assert len(texts) == 8
+        assert "nested choice text with words" in texts
+        assert texts[0].startswith("algebra") and texts[-1] == "nested choice text with words"
+
+    def test_missing_fields_fail_loudly(self, shards):
+        with pytest.raises(ConfigurationError, match="none of the indexed fields"):
+            list(shards.iter_parquet_texts('o/n', (('algebra', 'test'),), ('Question',)))
+
+
+def test_contamination_by_benchmark_in_stats_and_report(tmp_path):
+    from sanitizer_pro import Sanitizer, SanitizerConfig
+    ref = tmp_path / "gsm_like.jsonl"
+    ref.write_text(json.dumps({"question": BENCH_Q}) + '\n')
+    cfg = SanitizerConfig(min_chars=10, min_words=3, min_unique_ratio=0.0,
+                          decontam_refs=[str(ref)])
+    with Sanitizer(cfg) as s:
+        assert s.process_record({"text": BENCH_Q}).reason == 'contaminated'
+        html = s.report_html()
+    assert s.stats.to_dict()['contaminated_by'] == {'gsm_like.jsonl': 1}
+    assert 'Benchmark contamination by source' in html

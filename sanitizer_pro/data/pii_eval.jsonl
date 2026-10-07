@@ -1,0 +1,600 @@
+{"text": "Bonjour, ici Ingrid Tanaka. Rappelez-moi au +1 415 555 0137 ou écrivez à ingrid+news@example.com.", "spans": [[13, 26, "person"], [44, 59, "phone"], [73, 96, "email"]]}
+{"text": "Please email Sofia Haddad at sofia+news@mail.example.net before Friday.", "spans": [[13, 25, "person"], [29, 56, "email"]]}
+{"text": "Order 2537929471018460 shipped on 2026-03-14.", "spans": []}
+{"text": "Mohammed Kowalski moved from Adelaide to Adelaide last year.", "spans": [[0, 17, "person"], [29, 37, "location"], [41, 49, "location"]]}
+{"text": "Commit 5fad8203d2be1f2b9aabfa3b0cea4423f8f51249 fixed it.", "spans": []}
+{"text": "The service listens on 127.0.0.1 and 0.0.0.0 by default.", "spans": []}
+{"text": "Call Tomasz Okafor on (415) 555-0120 or write to 240 Via Roma.", "spans": [[5, 18, "person"], [22, 36, "phone"], [49, 61, "address"]]}
+{"text": "Commit 6c564b2654a9e4b703272ac3bffcee65ac1b3c55 fixed it.", "spans": []}
+{"text": "The bundle costs $8,085.61 for 3 seats.", "spans": []}
+{"text": "Please email Liam Wang at liam+news@example.org before Friday.", "spans": [[13, 22, "person"], [26, 47, "email"]]}
+{"text": "Bonjour, ici Priya Garcia. Rappelez-moi au (212) 555-0128 ou écrivez à priya.garcia@mail.example.net.", "spans": [[13, 25, "person"], [43, 57, "phone"], [71, 100, "email"]]}
+{"text": "Card 341301185760923 was charged; refund to IBAN NL02 ABNA 2834 4731 23.", "spans": [[5, 20, "card"], [49, 71, "iban"]]}
+{"text": "Details are on the portal (http://example.org/users/9).", "spans": [[27, 53, "url"]]}
+{"text": "Call Lucas Iyer on +49 30 9018 2057 or write to 227 Elm Street.", "spans": [[5, 15, "person"], [19, 35, "phone"], [48, 62, "address"]]}
+{"text": "Sofia Mensah moved from Toronto to Osaka last year.", "spans": [[0, 12, "person"], [24, 31, "location"], [35, 40, "location"]]}
+{"text": "Timestamp 1683984097 was recorded.", "spans": []}
+{"text": "Upgrade to version 8.5.5.41 today.", "spans": []}
+{"text": "Lucas Novak moved from Tromso to Adelaide last year.", "spans": [[0, 11, "person"], [23, 29, "location"], [33, 41, "location"]]}
+{"text": "Bitte überweisen Sie den Betrag auf FR2028705853057314876255674 (Kontoinhaber: Chen Sharma).", "spans": [[36, 63, "iban"], [79, 90, "person"]]}
+{"text": "The service listens on 127.0.0.1 and 0.0.0.0 by default.", "spans": []}
+{"text": "Order 5572138699800941 shipped on 2026-03-14.", "spans": []}
+{"text": "Hola Liam Mensah, tu pedido llegará a 98 King Road, Toronto.", "spans": [[5, 16, "person"], [38, 50, "address"], [52, 59, "location"]]}
+{"text": "Hola Elena Rossi, tu pedido llegará a 187 Hauptstrasse, Krakow.", "spans": [[5, 16, "person"], [38, 54, "address"], [56, 62, "location"]]}
+{"text": "In Python, a[1::2] takes every second item and b[::3] every third.", "spans": []}
+{"text": "Card 5153 6843 5463 3070 was charged; refund to IBAN FR8649938407877623262075715.", "spans": [[5, 24, "card"], [53, 80, "iban"]]}
+{"text": "Hola Ravi Garcia, tu pedido llegará a 123 Rue de la Paix, Toronto.", "spans": [[5, 16, "person"], [38, 56, "address"], [58, 65, "location"]]}
+{"text": "Bitte überweisen Sie den Betrag auf NL35 ABNA 2591 8876 54 (Kontoinhaber: Chen Wang).", "spans": [[36, 58, "iban"], [74, 83, "person"]]}
+{"text": "The service listens on 127.0.0.1 and 0.0.0.0 by default.", "spans": []}
+{"text": "Upgrade to version 9.5.3.30 today.", "spans": []}
+{"text": "Commit 23f8cf66bbcfe2a2a3239fc9b75ac2e19048c7c1 fixed it.", "spans": []}
+{"text": "Ingrid Petrova moved from Adelaide to Toronto last year.", "spans": [[0, 14, "person"], [26, 34, "location"], [38, 45, "location"]]}
+{"text": "Commit 9340b1f22f8e33e7402859c676d782074f800f72 fixed it.", "spans": []}
+{"text": "Details are on the portal (https://www.example.com/account?id=952).", "spans": [[27, 65, "url"]]}
+{"text": "Details are on the portal (www.example.org/profile).", "spans": [[27, 50, "url"]]}
+{"text": "Details are on the portal (http://corp.example.co.uk/users/77).", "spans": [[27, 61, "url"]]}
+{"text": "Server 10.58.141.86 logged a request from 2001:db8:85a3:0:0:8a2e:370:6ee8 at 09:14.", "spans": [[7, 19, "ip"], [42, 73, "ip"]]}
+{"text": "Upgrade to version 3.3.5.17 today.", "spans": []}
+{"text": "Server 192.0.2.60 logged a request from 2001:db8:8d9d::36d0 at 09:14.", "spans": [[7, 17, "ip"], [40, 59, "ip"]]}
+{"text": "Call Liam Smith on +33 1 42 68 53 94 or write to 46 Hauptstrasse.", "spans": [[5, 15, "person"], [19, 36, "phone"], [49, 64, "address"]]}
+{"text": "Details are on the portal (https://www.mail.example.net/account?id=750).", "spans": [[27, 70, "url"]]}
+{"text": "Population grew from 1,204,551 to 1,388,902 between 2010 and 2020.", "spans": []}
+{"text": "Population grew from 1,204,551 to 1,388,902 between 2010 and 2020.", "spans": []}
+{"text": "Details are on the portal (www.example.com/profile).", "spans": [[27, 50, "url"]]}
+{"text": "Details are on the portal (http://example.com/users/69).", "spans": [[27, 54, "url"]]}
+{"text": "Call Aiko Moreau on +49 30 9018 2074 or write to 116 Via Roma.", "spans": [[5, 16, "person"], [20, 36, "phone"], [49, 61, "address"]]}
+{"text": "Bitte überweisen Sie den Betrag auf FR86 7995 3382 9082 9882 0855 758 (Kontoinhaber: Hiroshi Okafor).", "spans": [[36, 69, "iban"], [85, 99, "person"]]}
+{"text": "Bitte überweisen Sie den Betrag auf FR39 2041 9656 4396 0907 7947 825 (Kontoinhaber: Tomasz Mensah).", "spans": [[36, 69, "iban"], [85, 98, "person"]]}
+{"text": "Population grew from 1,204,551 to 1,388,902 between 2010 and 2020.", "spans": []}
+{"text": "Server 192.0.2.163 logged a request from 2001:db8:85a3:0:0:8a2e:370:32d6 at 09:14.", "spans": [[7, 18, "ip"], [41, 72, "ip"]]}
+{"text": "Please email Mohammed Haddad at mohammed+news@mail.example.net before Friday.", "spans": [[13, 28, "person"], [32, 62, "email"]]}
+{"text": "SSN on file for Ravi Garcia: 248-35-5907.", "spans": [[16, 27, "person"], [29, 40, "ssn"]]}
+{"text": "Server 192.0.2.104 logged a request from 2001:db8:85a3:0:0:8a2e:370:60db at 09:14.", "spans": [[7, 18, "ip"], [41, 72, "ip"]]}
+{"text": "Bonjour, ici Olga Nakamura. Rappelez-moi au +44 20 7946 0981 ou écrivez à onakamura@example.com.", "spans": [[13, 26, "person"], [44, 60, "phone"], [74, 95, "email"]]}
+{"text": "Call Mohammed Mensah on +33 1 42 68 53 56 or write to 206 Calle Mayor.", "spans": [[5, 20, "person"], [24, 41, "phone"], [54, 69, "address"]]}
+{"text": "Card 5197-3495-0690-0953 was charged; refund to IBAN DE32 5151 9265 6976 4265 33.", "spans": [[5, 24, "card"], [53, 80, "iban"]]}
+{"text": "Priya O'Brien moved from Leipzig to Valparaiso last year.", "spans": [[0, 13, "person"], [25, 32, "location"], [36, 46, "location"]]}
+{"text": "Please email Chen Diallo at chen.diallo@example.com before Friday.", "spans": [[13, 24, "person"], [28, 51, "email"]]}
+{"text": "Call Amara Diallo on +44 20 7946 0942 or write to 99 Rue de la Paix.", "spans": [[5, 17, "person"], [21, 37, "phone"], [50, 67, "address"]]}
+{"text": "SSN on file for Tomasz O'Brien: 344-63-2957.", "spans": [[16, 30, "person"], [32, 43, "ssn"]]}
+{"text": "Details are on the portal (www.example.com/profile).", "spans": [[27, 50, "url"]]}
+{"text": "SSN on file for Liam Moreau: 553-61-4685.", "spans": [[16, 27, "person"], [29, 40, "ssn"]]}
+{"text": "Details are on the portal (https://www.example.com/account?id=403).", "spans": [[27, 65, "url"]]}
+{"text": "Card 6011704322067670 was charged; refund to IBAN GB38WEST94649344009596.", "spans": [[5, 21, "card"], [50, 72, "iban"]]}
+{"text": "SSN on file for Nadia Lindqvist: 259-51-5739.", "spans": [[16, 31, "person"], [33, 44, "ssn"]]}
+{"text": "Tracking number 0148477040191984197786 is live.", "spans": []}
+{"text": "Please email Chen Tanaka at chen+news@example.org before Friday.", "spans": [[13, 24, "person"], [28, 49, "email"]]}
+{"text": "Population grew from 1,204,551 to 1,388,902 between 2010 and 2020.", "spans": []}
+{"text": "Population grew from 1,204,551 to 1,388,902 between 2010 and 2020.", "spans": []}
+{"text": "Upgrade to version 3.4.5.24 today.", "spans": []}
+{"text": "Bitte überweisen Sie den Betrag auf GB74 WEST 4214 0477 4562 34 (Kontoinhaber: Maria Haddad).", "spans": [[36, 63, "iban"], [79, 91, "person"]]}
+{"text": "Bonjour, ici Nadia Petrova. Rappelez-moi au +33 1 42 68 53 23 ou écrivez à nadia+news@corp.example.co.uk.", "spans": [[13, 26, "person"], [44, 61, "phone"], [75, 104, "email"]]}
+{"text": "Timestamp 1604461294 was recorded.", "spans": []}
+{"text": "Tracking number 9184907376739441445579 is live.", "spans": []}
+{"text": "Server 10.195.152.204 logged a request from 2001:db8:4e42::3c49 at 09:14.", "spans": [[7, 21, "ip"], [44, 63, "ip"]]}
+{"text": "Priya Kowalski moved from Lisbon to Osaka last year.", "spans": [[0, 14, "person"], [26, 32, "location"], [36, 41, "location"]]}
+{"text": "Call John Okafor on (646) 555-0126 or write to 122 King Road.", "spans": [[5, 16, "person"], [20, 34, "phone"], [47, 60, "address"]]}
+{"text": "Bitte überweisen Sie den Betrag auf FR4268700433105308152964570 (Kontoinhaber: Tomasz Haddad).", "spans": [[36, 63, "iban"], [79, 92, "person"]]}
+{"text": "Details are on the portal (www.example.com/profile).", "spans": [[27, 50, "url"]]}
+{"text": "Server 192.0.2.21 logged a request from 2001:db8:85a3:0:0:8a2e:370:7b1e at 09:14.", "spans": [[7, 17, "ip"], [40, 71, "ip"]]}
+{"text": "Aiko Iyer moved from Nairobi to Leipzig last year.", "spans": [[0, 9, "person"], [21, 28, "location"], [32, 39, "location"]]}
+{"text": "SSN on file for Lucas Garcia: 782-27-1349.", "spans": [[16, 28, "person"], [30, 41, "ssn"]]}
+{"text": "SSN on file for Priya Novak: 604-36-8368.", "spans": [[16, 27, "person"], [29, 40, "ssn"]]}
+{"text": "Order 5389840962521924 shipped on 2026-03-14.", "spans": []}
+{"text": "Server 198.51.100.70 logged a request from 2001:db8:bbe5::fb69 at 09:14.", "spans": [[7, 20, "ip"], [43, 62, "ip"]]}
+{"text": "Request id 550e8400-e29b-41d4-a716-446655440000 processed.", "spans": []}
+{"text": "Bitte überweisen Sie den Betrag auf NL88 ABNA 4366 1582 23 (Kontoinhaber: Fatima Nakamura).", "spans": [[36, 58, "iban"], [74, 89, "person"]]}
+{"text": "The service listens on 127.0.0.1 and 0.0.0.0 by default.", "spans": []}
+{"text": "In Python, a[1::2] takes every second item and b[::3] every third.", "spans": []}
+{"text": "Order 6664575185292681 shipped on 2026-03-14.", "spans": []}
+{"text": "The service listens on 127.0.0.1 and 0.0.0.0 by default.", "spans": []}
+{"text": "SSN on file for John Wang: 357-39-1947.", "spans": [[16, 25, "person"], [27, 38, "ssn"]]}
+{"text": "Hola Lucas Diallo, tu pedido llegará a 120 Rue de la Paix, Krakow.", "spans": [[5, 17, "person"], [39, 57, "address"], [59, 65, "location"]]}
+{"text": "Tracking number 4733861852510585770481 is live.", "spans": []}
+{"text": "The service listens on 127.0.0.1 and 0.0.0.0 by default.", "spans": []}
+{"text": "Invalid SSN placeholders like 000-00-0000 must be rejected.", "spans": []}
+{"text": "ISBN 978-3-16-148410-0 is the second edition.", "spans": []}
+{"text": "Olga Kowalski moved from Chennai to Leipzig last year.", "spans": [[0, 13, "person"], [25, 32, "location"], [36, 43, "location"]]}
+{"text": "Please email Lucas Petrova at lucas+news@mail.example.net before Friday.", "spans": [[13, 26, "person"], [30, 57, "email"]]}
+{"text": "Hola Elena Okafor, tu pedido llegará a 51 Maple Avenue, Lisbon.", "spans": [[5, 17, "person"], [39, 54, "address"], [56, 62, "location"]]}
+{"text": "In Python, a[1::2] takes every second item and b[::3] every third.", "spans": []}
+{"text": "Chen Nakamura moved from Adelaide to Chennai last year.", "spans": [[0, 13, "person"], [25, 33, "location"], [37, 44, "location"]]}
+{"text": "Call Aiko Garcia on (212) 555-0159 or write to 130 Rue de la Paix.", "spans": [[5, 16, "person"], [20, 34, "phone"], [47, 65, "address"]]}
+{"text": "Timestamp 1643894813 was recorded.", "spans": []}
+{"text": "SSN on file for Ravi Rossi: 808-38-8187.", "spans": [[16, 26, "person"], [28, 39, "ssn"]]}
+{"text": "Call Kwame Iyer on +49 30 9018 2052 or write to 180 Oak Lane.", "spans": [[5, 15, "person"], [19, 35, "phone"], [48, 60, "address"]]}
+{"text": "Hiroshi Tanaka moved from Nairobi to Lisbon last year.", "spans": [[0, 14, "person"], [26, 33, "location"], [37, 43, "location"]]}
+{"text": "Bonjour, ici Lucas Petrova. Rappelez-moi au +44 20 7946 0955 ou écrivez à lucas.petrova@corp.example.co.uk.", "spans": [[13, 26, "person"], [44, 60, "phone"], [74, 106, "email"]]}
+{"text": "In Python, a[1::2] takes every second item and b[::3] every third.", "spans": []}
+{"text": "Request id 550e8400-e29b-41d4-a716-446655440000 processed.", "spans": []}
+{"text": "SSN on file for Maria Tanaka: 677-19-6686.", "spans": [[16, 28, "person"], [30, 41, "ssn"]]}
+{"text": "Timestamp 1649391167 was recorded.", "spans": []}
+{"text": "Upgrade to version 5.6.0.44 today.", "spans": []}
+{"text": "Bitte überweisen Sie den Betrag auf DE57 6196 8763 4789 7827 87 (Kontoinhaber: Liam Iyer).", "spans": [[36, 63, "iban"], [79, 88, "person"]]}
+{"text": "Commit 3a74f68564a444d7d291967e9018d1c4920a7103 fixed it.", "spans": []}
+{"text": "SSN on file for Nadia Jensen: 519-26-4978.", "spans": [[16, 28, "person"], [30, 41, "ssn"]]}
+{"text": "Bonjour, ici Olga Al-Hassan. Rappelez-moi au 646-555-0149 ou écrivez à olga+news@mail.example.net.", "spans": [[13, 27, "person"], [45, 57, "phone"], [71, 97, "email"]]}
+{"text": "Bitte überweisen Sie den Betrag auf FR41 2553 9161 5842 7670 5630 898 (Kontoinhaber: Priya Rossi).", "spans": [[36, 69, "iban"], [85, 96, "person"]]}
+{"text": "Call Olga Haddad on +49 30 9018 2016 or write to 197 Maple Avenue.", "spans": [[5, 16, "person"], [20, 36, "phone"], [49, 65, "address"]]}
+{"text": "Hola Fatima Diallo, tu pedido llegará a 245 Hauptstrasse, Leipzig.", "spans": [[5, 18, "person"], [40, 56, "address"], [58, 65, "location"]]}
+{"text": "Server 192.0.2.148 logged a request from 2001:db8:2ba8::9c49 at 09:14.", "spans": [[7, 18, "ip"], [41, 60, "ip"]]}
+{"text": "Bonjour, ici Elena Mensah. Rappelez-moi au 415-555-0142 ou écrivez à elena.mensah@example.com.", "spans": [[13, 25, "person"], [43, 55, "phone"], [69, 93, "email"]]}
+{"text": "Card 3450 408634 71405 was charged; refund to IBAN FR93 8940 2768 0730 8436 9974 669.", "spans": [[5, 22, "card"], [51, 84, "iban"]]}
+{"text": "Bonjour, ici Fatima Sharma. Rappelez-moi au 212.555.0153 ou écrivez à fatima.sharma@mail.example.net.", "spans": [[13, 26, "person"], [44, 56, "phone"], [70, 100, "email"]]}
+{"text": "Hola Lucas Al-Hassan, tu pedido llegará a 4 Oak Lane, Adelaide.", "spans": [[5, 20, "person"], [42, 52, "address"], [54, 62, "location"]]}
+{"text": "Details are on the portal (https://www.corp.example.co.uk/account?id=656).", "spans": [[27, 72, "url"]]}
+{"text": "Invalid SSN placeholders like 000-00-0000 must be rejected.", "spans": []}
+{"text": "The bundle costs $4,562.47 for 3 seats.", "spans": []}
+{"text": "Bonjour, ici Fatima Okafor. Rappelez-moi au (415) 555-0135 ou écrivez à fatima+news@corp.example.co.uk.", "spans": [[13, 26, "person"], [44, 58, "phone"], [72, 102, "email"]]}
+{"text": "Call Diego Novak on (212) 555-0125 or write to 244 Elm Street.", "spans": [[5, 16, "person"], [20, 34, "phone"], [47, 61, "address"]]}
+{"text": "SSN on file for Nadia Wang: 507-75-0199.", "spans": [[16, 26, "person"], [28, 39, "ssn"]]}
+{"text": "Bonjour, ici Fatima Iyer. Rappelez-moi au +33 1 42 68 53 52 ou écrivez à fatima.iyer@corp.example.co.uk.", "spans": [[13, 24, "person"], [42, 59, "phone"], [73, 103, "email"]]}
+{"text": "Server 10.137.252.93 logged a request from 2001:db8:85a3:0:0:8a2e:370:988d at 09:14.", "spans": [[7, 20, "ip"], [43, 74, "ip"]]}
+{"text": "Hola Nadia Iyer, tu pedido llegará a 3 Oak Lane, Adelaide.", "spans": [[5, 15, "person"], [37, 47, "address"], [49, 57, "location"]]}
+{"text": "SSN on file for Tomasz Rossi: 616-79-9706.", "spans": [[16, 28, "person"], [30, 41, "ssn"]]}
+{"text": "Population grew from 1,204,551 to 1,388,902 between 2010 and 2020.", "spans": []}
+{"text": "Aiko Smith moved from Osaka to Krakow last year.", "spans": [[0, 10, "person"], [22, 27, "location"], [31, 37, "location"]]}
+{"text": "Commit 8c14441f6208378b6521eb74026509848e1583f9 fixed it.", "spans": []}
+{"text": "Population grew from 1,204,551 to 1,388,902 between 2010 and 2020.", "spans": []}
+{"text": "Please email Ingrid O'Brien at ingrid.obrien@corp.example.co.uk before Friday.", "spans": [[13, 27, "person"], [31, 63, "email"]]}
+{"text": "Upgrade to version 1.7.0.49 today.", "spans": []}
+{"text": "Please email Maria Tanaka at mtanaka@mail.example.net before Friday.", "spans": [[13, 25, "person"], [29, 53, "email"]]}
+{"text": "Please email Chen Wang at chen+news@example.com before Friday.", "spans": [[13, 22, "person"], [26, 47, "email"]]}
+{"text": "Maria Moreau moved from Leipzig to Chennai last year.", "spans": [[0, 12, "person"], [24, 31, "location"], [35, 42, "location"]]}
+{"text": "Bitte überweisen Sie den Betrag auf DE47700793636043362543 (Kontoinhaber: Mohammed Novak).", "spans": [[36, 58, "iban"], [74, 88, "person"]]}
+{"text": "Order 3988820685894059 shipped on 2026-03-14.", "spans": []}
+{"text": "The service listens on 127.0.0.1 and 0.0.0.0 by default.", "spans": []}
+{"text": "SSN on file for Hiroshi Moreau: 134-73-3349.", "spans": [[16, 30, "person"], [32, 43, "ssn"]]}
+{"text": "ISBN 978-3-16-148410-0 is the second edition.", "spans": []}
+{"text": "Card 5391-5654-8513-2995 was charged; refund to IBAN NL80ABNA1915258009.", "spans": [[5, 24, "card"], [53, 71, "iban"]]}
+{"text": "SSN on file for Nadia Sharma: 102-93-6771.", "spans": [[16, 28, "person"], [30, 41, "ssn"]]}
+{"text": "Invalid SSN placeholders like 000-00-0000 must be rejected.", "spans": []}
+{"text": "Bonjour, ici Mohammed Novak. Rappelez-moi au 646.555.0110 ou écrivez à mohammed+news@example.org.", "spans": [[13, 27, "person"], [45, 57, "phone"], [71, 96, "email"]]}
+{"text": "Server 192.0.2.236 logged a request from 2001:db8:85a3:0:0:8a2e:370:f974 at 09:14.", "spans": [[7, 18, "ip"], [41, 72, "ip"]]}
+{"text": "Bonjour, ici Amara Wang. Rappelez-moi au +44 20 7946 0963 ou écrivez à amara+news@corp.example.co.uk.", "spans": [[13, 23, "person"], [41, 57, "phone"], [71, 100, "email"]]}
+{"text": "Priya Smith moved from Nairobi to Tromso last year.", "spans": [[0, 11, "person"], [23, 30, "location"], [34, 40, "location"]]}
+{"text": "The bundle costs $1,944.19 for 3 seats.", "spans": []}
+{"text": "Details are on the portal (http://example.com/users/5).", "spans": [[27, 53, "url"]]}
+{"text": "SSN on file for Ingrid Tanaka: 758-89-9901.", "spans": [[16, 29, "person"], [31, 42, "ssn"]]}
+{"text": "Server 10.223.150.111 logged a request from 2001:db8:85a3:0:0:8a2e:370:4144 at 09:14.", "spans": [[7, 21, "ip"], [44, 75, "ip"]]}
+{"text": "ISBN 978-3-16-148410-0 is the second edition.", "spans": []}
+{"text": "Details are on the portal (http://corp.example.co.uk/users/26).", "spans": [[27, 61, "url"]]}
+{"text": "Please email Nadia O'Brien at nobrien@example.com before Friday.", "spans": [[13, 26, "person"], [30, 49, "email"]]}
+{"text": "Please email Elena Moreau at elena.moreau@example.com before Friday.", "spans": [[13, 25, "person"], [29, 53, "email"]]}
+{"text": "Tracking number 5700220702289747722308 is live.", "spans": []}
+{"text": "Card 4228460092811847 was charged; refund to IBAN DE47 2678 0665 1113 9546 73.", "spans": [[5, 21, "card"], [50, 77, "iban"]]}
+{"text": "Chen Rossi moved from Marseille to Adelaide last year.", "spans": [[0, 10, "person"], [22, 31, "location"], [35, 43, "location"]]}
+{"text": "Hola John Smith, tu pedido llegará a 81 Via Roma, Adelaide.", "spans": [[5, 15, "person"], [37, 48, "address"], [50, 58, "location"]]}
+{"text": "Call Maria O'Brien on 415.555.0145 or write to 23 King Road.", "spans": [[5, 18, "person"], [22, 34, "phone"], [47, 59, "address"]]}
+{"text": "Call Ingrid Petrova on +33 1 42 68 53 25 or write to 139 Rue de la Paix.", "spans": [[5, 19, "person"], [23, 40, "phone"], [53, 71, "address"]]}
+{"text": "Ingrid Lindqvist moved from Chennai to Toronto last year.", "spans": [[0, 16, "person"], [28, 35, "location"], [39, 46, "location"]]}
+{"text": "Bitte überweisen Sie den Betrag auf GB27 WEST 0078 7634 7604 15 (Kontoinhaber: Amara Kowalski).", "spans": [[36, 63, "iban"], [79, 93, "person"]]}
+{"text": "ISBN 978-3-16-148410-0 is the second edition.", "spans": []}
+{"text": "The bundle costs $1,173.23 for 3 seats.", "spans": []}
+{"text": "Details are on the portal (www.example.com/profile).", "spans": [[27, 50, "url"]]}
+{"text": "Call Elena Tanaka on (212) 555-0143 or write to 91 Calle Mayor.", "spans": [[5, 17, "person"], [21, 35, "phone"], [48, 62, "address"]]}
+{"text": "Invalid SSN placeholders like 000-00-0000 must be rejected.", "spans": []}
+{"text": "Hola Mohammed Al-Hassan, tu pedido llegará a 36 Oak Lane, Marseille.", "spans": [[5, 23, "person"], [45, 56, "address"], [58, 67, "location"]]}
+{"text": "Tracking number 6507356278815011092780 is live.", "spans": []}
+{"text": "Please email Kwame Garcia at kgarcia@corp.example.co.uk before Friday.", "spans": [[13, 25, "person"], [29, 55, "email"]]}
+{"text": "Bonjour, ici Aiko Mensah. Rappelez-moi au 646-555-0143 ou écrivez à aiko.mensah@corp.example.co.uk.", "spans": [[13, 24, "person"], [42, 54, "phone"], [68, 98, "email"]]}
+{"text": "Server 198.51.100.169 logged a request from 2001:db8:7a9f::4837 at 09:14.", "spans": [[7, 21, "ip"], [44, 63, "ip"]]}
+{"text": "Card 3415 543574 76740 was charged; refund to IBAN DE02 8488 4746 8517 3091 74.", "spans": [[5, 22, "card"], [51, 78, "iban"]]}
+{"text": "Timestamp 1715408270 was recorded.", "spans": []}
+{"text": "Hola Diego Haddad, tu pedido llegará a 88 Maple Avenue, Toronto.", "spans": [[5, 17, "person"], [39, 54, "address"], [56, 63, "location"]]}
+{"text": "Hola Diego Al-Hassan, tu pedido llegará a 111 Calle Mayor, Osaka.", "spans": [[5, 20, "person"], [42, 57, "address"], [59, 64, "location"]]}
+{"text": "Bitte überweisen Sie den Betrag auf DE94191841447483274122 (Kontoinhaber: Fatima Moreau).", "spans": [[36, 58, "iban"], [74, 87, "person"]]}
+{"text": "SSN on file for Chen Haddad: 223-39-4915.", "spans": [[16, 27, "person"], [29, 40, "ssn"]]}
+{"text": "Order 4229750252577592 shipped on 2026-03-14.", "spans": []}
+{"text": "Details are on the portal (www.example.org/profile).", "spans": [[27, 50, "url"]]}
+{"text": "Hola Aiko Lindqvist, tu pedido llegará a 58 Rue de la Paix, Adelaide.", "spans": [[5, 19, "person"], [41, 58, "address"], [60, 68, "location"]]}
+{"text": "Server 192.0.2.215 logged a request from 2001:db8:29b4::6f46 at 09:14.", "spans": [[7, 18, "ip"], [41, 60, "ip"]]}
+{"text": "Request id 550e8400-e29b-41d4-a716-446655440000 processed.", "spans": []}
+{"text": "Commit ffb66186336e066a51476958c0dda9c41fc92367 fixed it.", "spans": []}
+{"text": "Card 6011-5057-4478-1834 was charged; refund to IBAN NL03ABNA1563770777.", "spans": [[5, 24, "card"], [53, 71, "iban"]]}
+{"text": "Call Ravi Smith on 646-555-0120 or write to 238 Oak Lane.", "spans": [[5, 15, "person"], [19, 31, "phone"], [44, 56, "address"]]}
+{"text": "Order 2165550184417918 shipped on 2026-03-14.", "spans": []}
+{"text": "Hola Priya Lindqvist, tu pedido llegará a 204 Rue de la Paix, Valparaiso.", "spans": [[5, 20, "person"], [42, 60, "address"], [62, 72, "location"]]}
+{"text": "Please email Liam Tanaka at ltanaka@example.com before Friday.", "spans": [[13, 24, "person"], [28, 47, "email"]]}
+{"text": "Liam Rossi moved from Krakow to Leipzig last year.", "spans": [[0, 10, "person"], [22, 28, "location"], [32, 39, "location"]]}
+{"text": "Details are on the portal (http://example.org/users/8).", "spans": [[27, 53, "url"]]}
+{"text": "The service listens on 127.0.0.1 and 0.0.0.0 by default.", "spans": []}
+{"text": "Call Mohammed Wang on +49 30 9018 2040 or write to 142 Calle Mayor.", "spans": [[5, 18, "person"], [22, 38, "phone"], [51, 66, "address"]]}
+{"text": "Olga Tanaka moved from Leipzig to Nairobi last year.", "spans": [[0, 11, "person"], [23, 30, "location"], [34, 41, "location"]]}
+{"text": "Aiko Kowalski moved from Leipzig to Nairobi last year.", "spans": [[0, 13, "person"], [25, 32, "location"], [36, 43, "location"]]}
+{"text": "Card 3450-238211-51616 was charged; refund to IBAN DE43 6562 1992 8157 3066 66.", "spans": [[5, 22, "card"], [51, 78, "iban"]]}
+{"text": "Diego Novak moved from Nairobi to Toronto last year.", "spans": [[0, 11, "person"], [23, 30, "location"], [34, 41, "location"]]}
+{"text": "Population grew from 1,204,551 to 1,388,902 between 2010 and 2020.", "spans": []}
+{"text": "Order 4837902466341206 shipped on 2026-03-14.", "spans": []}
+{"text": "Bitte überweisen Sie den Betrag auf FR0245577961297707667748672 (Kontoinhaber: Amara Iyer).", "spans": [[36, 63, "iban"], [79, 89, "person"]]}
+{"text": "Bitte überweisen Sie den Betrag auf DE26272653818629757208 (Kontoinhaber: Elena Mensah).", "spans": [[36, 58, "iban"], [74, 86, "person"]]}
+{"text": "Please email John Moreau at john+news@example.org before Friday.", "spans": [[13, 24, "person"], [28, 49, "email"]]}
+{"text": "Upgrade to version 9.3.1.97 today.", "spans": []}
+{"text": "Order 5991888822836256 shipped on 2026-03-14.", "spans": []}
+{"text": "Server 10.216.92.93 logged a request from 2001:db8:85a3:0:0:8a2e:370:9f64 at 09:14.", "spans": [[7, 19, "ip"], [42, 73, "ip"]]}
+{"text": "Server 198.51.100.1 logged a request from 2001:db8:85a3:0:0:8a2e:370:a2a9 at 09:14.", "spans": [[7, 19, "ip"], [42, 73, "ip"]]}
+{"text": "Bitte überweisen Sie den Betrag auf FR4106748276288641841972693 (Kontoinhaber: Priya Garcia).", "spans": [[36, 63, "iban"], [79, 91, "person"]]}
+{"text": "The bundle costs $8,010.84 for 3 seats.", "spans": []}
+{"text": "Details are on the portal (https://www.corp.example.co.uk/account?id=649).", "spans": [[27, 72, "url"]]}
+{"text": "Bitte überweisen Sie den Betrag auf NL68 ABNA 3202 2288 11 (Kontoinhaber: Mohammed Jensen).", "spans": [[36, 58, "iban"], [74, 89, "person"]]}
+{"text": "Details are on the portal (https://www.corp.example.co.uk/account?id=461).", "spans": [[27, 72, "url"]]}
+{"text": "Card 4728 8140 8891 7106 was charged; refund to IBAN DE80 0948 1770 9667 5770 45.", "spans": [[5, 24, "card"], [53, 80, "iban"]]}
+{"text": "Server 198.51.100.30 logged a request from 2001:db8:85a3:0:0:8a2e:370:ceff at 09:14.", "spans": [[7, 20, "ip"], [43, 74, "ip"]]}
+{"text": "Tracking number 4817823191444911843893 is live.", "spans": []}
+{"text": "Please email Olga Haddad at olga+news@example.org before Friday.", "spans": [[13, 24, "person"], [28, 49, "email"]]}
+{"text": "Call Ingrid Lindqvist on +33 1 42 68 53 10 or write to 22 Elm Street.", "spans": [[5, 21, "person"], [25, 42, "phone"], [55, 68, "address"]]}
+{"text": "Request id 550e8400-e29b-41d4-a716-446655440000 processed.", "spans": []}
+{"text": "Please email Aiko Garcia at aiko+news@mail.example.net before Friday.", "spans": [[13, 24, "person"], [28, 54, "email"]]}
+{"text": "Tracking number 8247107033266597382973 is live.", "spans": []}
+{"text": "SSN on file for Kwame Al-Hassan: 490-44-6143.", "spans": [[16, 31, "person"], [33, 44, "ssn"]]}
+{"text": "Bonjour, ici Diego Okafor. Rappelez-moi au 646.555.0166 ou écrivez à diego+news@example.com.", "spans": [[13, 25, "person"], [43, 55, "phone"], [69, 91, "email"]]}
+{"text": "Card 4201-9265-5668-0853 was charged; refund to IBAN DE27 3476 2749 3640 9376 55.", "spans": [[5, 24, "card"], [53, 80, "iban"]]}
+{"text": "The bundle costs $7,405.17 for 3 seats.", "spans": []}
+{"text": "Please email Kwame Garcia at kwame+news@mail.example.net before Friday.", "spans": [[13, 25, "person"], [29, 56, "email"]]}
+{"text": "Call Sofia Novak on (646) 555-0199 or write to 152 Via Roma.", "spans": [[5, 16, "person"], [20, 34, "phone"], [47, 59, "address"]]}
+{"text": "Server 192.0.2.28 logged a request from 2001:db8:2eb6::acdd at 09:14.", "spans": [[7, 17, "ip"], [40, 59, "ip"]]}
+{"text": "Please email Ingrid Diallo at idiallo@example.com before Friday.", "spans": [[13, 26, "person"], [30, 49, "email"]]}
+{"text": "Bitte überweisen Sie den Betrag auf GB95WEST86905167818778 (Kontoinhaber: Chen Wang).", "spans": [[36, 58, "iban"], [74, 83, "person"]]}
+{"text": "Card 4652846136436804 was charged; refund to IBAN DE08689682379269690959.", "spans": [[5, 21, "card"], [50, 72, "iban"]]}
+{"text": "Hola Lucas Mensah, tu pedido llegará a 185 Rue de la Paix, Tromso.", "spans": [[5, 17, "person"], [39, 57, "address"], [59, 65, "location"]]}
+{"text": "Call Mohammed Novak on (646) 555-0151 or write to 182 Maple Avenue.", "spans": [[5, 19, "person"], [23, 37, "phone"], [50, 66, "address"]]}
+{"text": "Server 198.51.100.248 logged a request from 2001:db8:85a3:0:0:8a2e:370:b1bd at 09:14.", "spans": [[7, 21, "ip"], [44, 75, "ip"]]}
+{"text": "Bonjour, ici Ravi Mensah. Rappelez-moi au 646.555.0148 ou écrivez à rmensah@example.com.", "spans": [[13, 24, "person"], [42, 54, "phone"], [68, 87, "email"]]}
+{"text": "Server 198.51.100.78 logged a request from 2001:db8:85a3:0:0:8a2e:370:e536 at 09:14.", "spans": [[7, 20, "ip"], [43, 74, "ip"]]}
+{"text": "Server 192.0.2.118 logged a request from 2001:db8:748d::fe57 at 09:14.", "spans": [[7, 18, "ip"], [41, 60, "ip"]]}
+{"text": "Timestamp 1769382473 was recorded.", "spans": []}
+{"text": "Invalid SSN placeholders like 000-00-0000 must be rejected.", "spans": []}
+{"text": "Hola Fatima Kowalski, tu pedido llegará a 20 Maple Avenue, Marseille.", "spans": [[5, 20, "person"], [42, 57, "address"], [59, 68, "location"]]}
+{"text": "Population grew from 1,204,551 to 1,388,902 between 2010 and 2020.", "spans": []}
+{"text": "Bonjour, ici Kwame Sharma. Rappelez-moi au +33 1 42 68 53 12 ou écrivez à ksharma@corp.example.co.uk.", "spans": [[13, 25, "person"], [43, 60, "phone"], [74, 100, "email"]]}
+{"text": "SSN on file for Elena Wang: 534-12-2801.", "spans": [[16, 26, "person"], [28, 39, "ssn"]]}
+{"text": "Timestamp 1722864517 was recorded.", "spans": []}
+{"text": "SSN on file for Kwame O'Brien: 486-58-1549.", "spans": [[16, 29, "person"], [31, 42, "ssn"]]}
+{"text": "SSN on file for Fatima Jensen: 536-39-1743.", "spans": [[16, 29, "person"], [31, 42, "ssn"]]}
+{"text": "Call Amara Jensen on +1 415 555 0148 or write to 227 King Road.", "spans": [[5, 17, "person"], [21, 36, "phone"], [49, 62, "address"]]}
+{"text": "Priya O'Brien moved from Toronto to Toronto last year.", "spans": [[0, 13, "person"], [25, 32, "location"], [36, 43, "location"]]}
+{"text": "Population grew from 1,204,551 to 1,388,902 between 2010 and 2020.", "spans": []}
+{"text": "Please email Ingrid Novak at inovak@example.com before Friday.", "spans": [[13, 25, "person"], [29, 47, "email"]]}
+{"text": "Request id 550e8400-e29b-41d4-a716-446655440000 processed.", "spans": []}
+{"text": "Please email Kwame Petrova at kwame.petrova@example.org before Friday.", "spans": [[13, 26, "person"], [30, 55, "email"]]}
+{"text": "Order 5419168682839530 shipped on 2026-03-14.", "spans": []}
+{"text": "Commit 1d920338586bf5050dc1c23e1e31c9e1362625d5 fixed it.", "spans": []}
+{"text": "Timestamp 1729359331 was recorded.", "spans": []}
+{"text": "The bundle costs $4,807.34 for 3 seats.", "spans": []}
+{"text": "The bundle costs $7,250.69 for 3 seats.", "spans": []}
+{"text": "Card 6011087138094462 was charged; refund to IBAN NL43 ABNA 7148 3806 42.", "spans": [[5, 21, "card"], [50, 72, "iban"]]}
+{"text": "SSN on file for Aiko Moreau: 306-23-9625.", "spans": [[16, 27, "person"], [29, 40, "ssn"]]}
+{"text": "Bonjour, ici Mohammed Jensen. Rappelez-moi au 646-555-0137 ou écrivez à mjensen@example.com.", "spans": [[13, 28, "person"], [46, 58, "phone"], [72, 91, "email"]]}
+{"text": "Request id 550e8400-e29b-41d4-a716-446655440000 processed.", "spans": []}
+{"text": "Commit fb667a0ac1ca0c159d417859987d219b02fd8dcd fixed it.", "spans": []}
+{"text": "Bitte überweisen Sie den Betrag auf GB77WEST19504596593158 (Kontoinhaber: Diego Mensah).", "spans": [[36, 58, "iban"], [74, 86, "person"]]}
+{"text": "Call Lucas Novak on +49 30 9018 2038 or write to 108 Via Roma.", "spans": [[5, 16, "person"], [20, 36, "phone"], [49, 61, "address"]]}
+{"text": "Server 198.51.100.13 logged a request from 2001:db8:a5d9::bcb3 at 09:14.", "spans": [[7, 20, "ip"], [43, 62, "ip"]]}
+{"text": "Invalid SSN placeholders like 000-00-0000 must be rejected.", "spans": []}
+{"text": "Bonjour, ici Amara Rossi. Rappelez-moi au 212-555-0197 ou écrivez à amara+news@mail.example.net.", "spans": [[13, 24, "person"], [42, 54, "phone"], [68, 95, "email"]]}
+{"text": "SSN on file for Mohammed Wang: 152-91-2374.", "spans": [[16, 29, "person"], [31, 42, "ssn"]]}
+{"text": "SSN on file for Aiko Iyer: 601-07-6448.", "spans": [[16, 25, "person"], [27, 38, "ssn"]]}
+{"text": "In Python, a[1::2] takes every second item and b[::3] every third.", "spans": []}
+{"text": "Request id 550e8400-e29b-41d4-a716-446655440000 processed.", "spans": []}
+{"text": "Upgrade to version 2.7.7.29 today.", "spans": []}
+{"text": "SSN on file for Liam Petrova: 078-24-2090.", "spans": [[16, 28, "person"], [30, 41, "ssn"]]}
+{"text": "SSN on file for Sofia Okafor: 217-95-2308.", "spans": [[16, 28, "person"], [30, 41, "ssn"]]}
+{"text": "Call Diego Okafor on 415.555.0172 or write to 1 King Road.", "spans": [[5, 17, "person"], [21, 33, "phone"], [46, 57, "address"]]}
+{"text": "Bitte überweisen Sie den Betrag auf NL98ABNA9695895211 (Kontoinhaber: Mohammed Al-Hassan).", "spans": [[36, 54, "iban"], [70, 88, "person"]]}
+{"text": "Bitte überweisen Sie den Betrag auf DE63712532897071820744 (Kontoinhaber: Lucas Haddad).", "spans": [[36, 58, "iban"], [74, 86, "person"]]}
+{"text": "Please email Aiko Kowalski at aiko.kowalski@mail.example.net before Friday.", "spans": [[13, 26, "person"], [30, 60, "email"]]}
+{"text": "Details are on the portal (www.corp.example.co.uk/profile).", "spans": [[27, 57, "url"]]}
+{"text": "Details are on the portal (www.example.com/profile).", "spans": [[27, 50, "url"]]}
+{"text": "Order 4703698698266602 shipped on 2026-03-14.", "spans": []}
+{"text": "Server 192.0.2.148 logged a request from 2001:db8:85a3:0:0:8a2e:370:fcd8 at 09:14.", "spans": [[7, 18, "ip"], [41, 72, "ip"]]}
+{"text": "Bitte überweisen Sie den Betrag auf FR34 3821 2584 7198 4609 4103 601 (Kontoinhaber: Diego Novak).", "spans": [[36, 69, "iban"], [85, 96, "person"]]}
+{"text": "Please email Aiko Haddad at aiko+news@corp.example.co.uk before Friday.", "spans": [[13, 24, "person"], [28, 56, "email"]]}
+{"text": "The bundle costs $6,410.55 for 3 seats.", "spans": []}
+{"text": "Details are on the portal (http://corp.example.co.uk/users/38).", "spans": [[27, 61, "url"]]}
+{"text": "Server 192.0.2.74 logged a request from 2001:db8:85a3:0:0:8a2e:370:10e2 at 09:14.", "spans": [[7, 17, "ip"], [40, 71, "ip"]]}
+{"text": "Card 340756080930668 was charged; refund to IBAN DE45 7581 6282 6034 2135 15.", "spans": [[5, 20, "card"], [49, 76, "iban"]]}
+{"text": "Bitte überweisen Sie den Betrag auf DE68798696324114317073 (Kontoinhaber: Nadia Diallo).", "spans": [[36, 58, "iban"], [74, 86, "person"]]}
+{"text": "Details are on the portal (https://www.mail.example.net/account?id=704).", "spans": [[27, 70, "url"]]}
+{"text": "Server 198.51.100.27 logged a request from 2001:db8:2f7b::ab48 at 09:14.", "spans": [[7, 20, "ip"], [43, 62, "ip"]]}
+{"text": "Server 198.51.100.116 logged a request from 2001:db8:85a3:0:0:8a2e:370:a6ef at 09:14.", "spans": [[7, 21, "ip"], [44, 75, "ip"]]}
+{"text": "Bitte überweisen Sie den Betrag auf NL24ABNA0186940080 (Kontoinhaber: Chen Nakamura).", "spans": [[36, 54, "iban"], [70, 83, "person"]]}
+{"text": "Bonjour, ici Olga Okafor. Rappelez-moi au 212.555.0191 ou écrivez à olga.okafor@example.org.", "spans": [[13, 24, "person"], [42, 54, "phone"], [68, 91, "email"]]}
+{"text": "In Python, a[1::2] takes every second item and b[::3] every third.", "spans": []}
+{"text": "In Python, a[1::2] takes every second item and b[::3] every third.", "spans": []}
+{"text": "Server 192.0.2.200 logged a request from 2001:db8:95ea::53f at 09:14.", "spans": [[7, 18, "ip"], [41, 59, "ip"]]}
+{"text": "Bonjour, ici Aiko Sharma. Rappelez-moi au +49 30 9018 2076 ou écrivez à aiko.sharma@mail.example.net.", "spans": [[13, 24, "person"], [42, 58, "phone"], [72, 100, "email"]]}
+{"text": "Mohammed Sharma moved from Valparaiso to Marseille last year.", "spans": [[0, 15, "person"], [27, 37, "location"], [41, 50, "location"]]}
+{"text": "Details are on the portal (www.example.org/profile).", "spans": [[27, 50, "url"]]}
+{"text": "Server 10.177.62.5 logged a request from 2001:db8:85a3:0:0:8a2e:370:dcde at 09:14.", "spans": [[7, 18, "ip"], [41, 72, "ip"]]}
+{"text": "Amara Diallo moved from Osaka to Bogota last year.", "spans": [[0, 12, "person"], [24, 29, "location"], [33, 39, "location"]]}
+{"text": "SSN on file for Diego Garcia: 563-34-8258.", "spans": [[16, 28, "person"], [30, 41, "ssn"]]}
+{"text": "Server 198.51.100.210 logged a request from 2001:db8:5784::1856 at 09:14.", "spans": [[7, 21, "ip"], [44, 63, "ip"]]}
+{"text": "Bonjour, ici Ravi Al-Hassan. Rappelez-moi au +1 415 555 0125 ou écrivez à ravi+news@example.com.", "spans": [[13, 27, "person"], [45, 60, "phone"], [74, 95, "email"]]}
+{"text": "Please email Fatima Haddad at fatima.haddad@example.org before Friday.", "spans": [[13, 26, "person"], [30, 55, "email"]]}
+{"text": "Elena Okafor moved from Tromso to Adelaide last year.", "spans": [[0, 12, "person"], [24, 30, "location"], [34, 42, "location"]]}
+{"text": "Please email Kwame Petrova at kpetrova@mail.example.net before Friday.", "spans": [[13, 26, "person"], [30, 55, "email"]]}
+{"text": "Bonjour, ici Mohammed Jensen. Rappelez-moi au +1 415 555 0163 ou écrivez à mjensen@example.com.", "spans": [[13, 28, "person"], [46, 61, "phone"], [75, 94, "email"]]}
+{"text": "Population grew from 1,204,551 to 1,388,902 between 2010 and 2020.", "spans": []}
+{"text": "Hola John Tanaka, tu pedido llegará a 103 Maple Avenue, Adelaide.", "spans": [[5, 16, "person"], [38, 54, "address"], [56, 64, "location"]]}
+{"text": "Details are on the portal (http://corp.example.co.uk/users/2).", "spans": [[27, 60, "url"]]}
+{"text": "The service listens on 127.0.0.1 and 0.0.0.0 by default.", "spans": []}
+{"text": "Bonjour, ici Ingrid Al-Hassan. Rappelez-moi au (212) 555-0189 ou écrivez à ingrid+news@corp.example.co.uk.", "spans": [[13, 29, "person"], [47, 61, "phone"], [75, 105, "email"]]}
+{"text": "Call Maria Lindqvist on 415.555.0139 or write to 124 Rue de la Paix.", "spans": [[5, 20, "person"], [24, 36, "phone"], [49, 67, "address"]]}
+{"text": "Population grew from 1,204,551 to 1,388,902 between 2010 and 2020.", "spans": []}
+{"text": "Details are on the portal (www.corp.example.co.uk/profile).", "spans": [[27, 57, "url"]]}
+{"text": "The service listens on 127.0.0.1 and 0.0.0.0 by default.", "spans": []}
+{"text": "Bitte überweisen Sie den Betrag auf GB07WEST70148610517555 (Kontoinhaber: John Moreau).", "spans": [[36, 58, "iban"], [74, 85, "person"]]}
+{"text": "Population grew from 1,204,551 to 1,388,902 between 2010 and 2020.", "spans": []}
+{"text": "The service listens on 127.0.0.1 and 0.0.0.0 by default.", "spans": []}
+{"text": "Please email Mohammed Moreau at mohammed+news@example.org before Friday.", "spans": [[13, 28, "person"], [32, 57, "email"]]}
+{"text": "Card 6011 0529 5163 2772 was charged; refund to IBAN DE79808180389832301908.", "spans": [[5, 24, "card"], [53, 75, "iban"]]}
+{"text": "Server 192.0.2.248 logged a request from 2001:db8:9cea::b372 at 09:14.", "spans": [[7, 18, "ip"], [41, 60, "ip"]]}
+{"text": "Please email Liam Moreau at liam.moreau@example.com before Friday.", "spans": [[13, 24, "person"], [28, 51, "email"]]}
+{"text": "SSN on file for Diego Petrova: 005-91-3561.", "spans": [[16, 29, "person"], [31, 42, "ssn"]]}
+{"text": "Bonjour, ici Kwame Lindqvist. Rappelez-moi au (212) 555-0144 ou écrivez à klindqvist@example.com.", "spans": [[13, 28, "person"], [46, 60, "phone"], [74, 96, "email"]]}
+{"text": "The bundle costs $7,853.69 for 3 seats.", "spans": []}
+{"text": "Tracking number 7823143645532248283594 is live.", "spans": []}
+{"text": "Hola Hiroshi Diallo, tu pedido llegará a 46 Rue de la Paix, Toronto.", "spans": [[5, 19, "person"], [41, 58, "address"], [60, 67, "location"]]}
+{"text": "Server 198.51.100.229 logged a request from 2001:db8:f576::9234 at 09:14.", "spans": [[7, 21, "ip"], [44, 63, "ip"]]}
+{"text": "Population grew from 1,204,551 to 1,388,902 between 2010 and 2020.", "spans": []}
+{"text": "ISBN 978-3-16-148410-0 is the second edition.", "spans": []}
+{"text": "Bonjour, ici Elena Diallo. Rappelez-moi au (415) 555-0151 ou écrivez à elena.diallo@example.com.", "spans": [[13, 25, "person"], [43, 57, "phone"], [71, 95, "email"]]}
+{"text": "Liam Garcia moved from Krakow to Chennai last year.", "spans": [[0, 11, "person"], [23, 29, "location"], [33, 40, "location"]]}
+{"text": "Please email Mohammed Okafor at mohammed+news@example.com before Friday.", "spans": [[13, 28, "person"], [32, 57, "email"]]}
+{"text": "Invalid SSN placeholders like 000-00-0000 must be rejected.", "spans": []}
+{"text": "ISBN 978-3-16-148410-0 is the second edition.", "spans": []}
+{"text": "Bonjour, ici Ravi Lindqvist. Rappelez-moi au 646-555-0125 ou écrivez à ravi.lindqvist@example.org.", "spans": [[13, 27, "person"], [45, 57, "phone"], [71, 97, "email"]]}
+{"text": "Hola Mohammed Moreau, tu pedido llegará a 83 Hauptstrasse, Bogota.", "spans": [[5, 20, "person"], [42, 57, "address"], [59, 65, "location"]]}
+{"text": "Population grew from 1,204,551 to 1,388,902 between 2010 and 2020.", "spans": []}
+{"text": "Population grew from 1,204,551 to 1,388,902 between 2010 and 2020.", "spans": []}
+{"text": "Card 6011-3877-5878-4461 was charged; refund to IBAN DE56 2047 1114 3311 0221 61.", "spans": [[5, 24, "card"], [53, 80, "iban"]]}
+{"text": "SSN on file for Fatima Garcia: 511-25-9061.", "spans": [[16, 29, "person"], [31, 42, "ssn"]]}
+{"text": "Bonjour, ici Tomasz Garcia. Rappelez-moi au +1 415 555 0166 ou écrivez à tomasz+news@mail.example.net.", "spans": [[13, 26, "person"], [44, 59, "phone"], [73, 101, "email"]]}
+{"text": "Population grew from 1,204,551 to 1,388,902 between 2010 and 2020.", "spans": []}
+{"text": "Bitte überweisen Sie den Betrag auf NL48ABNA4233502228 (Kontoinhaber: Fatima Smith).", "spans": [[36, 54, "iban"], [70, 82, "person"]]}
+{"text": "ISBN 978-3-16-148410-0 is the second edition.", "spans": []}
+{"text": "Bonjour, ici Nadia Garcia. Rappelez-moi au +1 415 555 0113 ou écrivez à nadia.garcia@example.org.", "spans": [[13, 25, "person"], [43, 58, "phone"], [72, 96, "email"]]}
+{"text": "Hola Kwame Kowalski, tu pedido llegará a 21 Rue de la Paix, Chennai.", "spans": [[5, 19, "person"], [41, 58, "address"], [60, 67, "location"]]}
+{"text": "Please email Maria Kowalski at maria+news@example.org before Friday.", "spans": [[13, 27, "person"], [31, 53, "email"]]}
+{"text": "SSN on file for John Kowalski: 099-18-2968.", "spans": [[16, 29, "person"], [31, 42, "ssn"]]}
+{"text": "Invalid SSN placeholders like 000-00-0000 must be rejected.", "spans": []}
+{"text": "Order 2527312222707251 shipped on 2026-03-14.", "spans": []}
+{"text": "Commit 4dd536f6679d44471985016969f43448682762fb fixed it.", "spans": []}
+{"text": "Please email Elena Smith at elena.smith@corp.example.co.uk before Friday.", "spans": [[13, 24, "person"], [28, 58, "email"]]}
+{"text": "Diego Al-Hassan moved from Krakow to Marseille last year.", "spans": [[0, 15, "person"], [27, 33, "location"], [37, 46, "location"]]}
+{"text": "Card 6011 9313 7811 8566 was charged; refund to IBAN DE43 0391 5258 3652 1099 42.", "spans": [[5, 24, "card"], [53, 80, "iban"]]}
+{"text": "Server 192.0.2.75 logged a request from 2001:db8:5b78::e572 at 09:14.", "spans": [[7, 17, "ip"], [40, 59, "ip"]]}
+{"text": "Diego Mensah moved from Krakow to Toronto last year.", "spans": [[0, 12, "person"], [24, 30, "location"], [34, 41, "location"]]}
+{"text": "Invalid SSN placeholders like 000-00-0000 must be rejected.", "spans": []}
+{"text": "Commit 99b3e77a1c92887353bb15d08ff886197842bee7 fixed it.", "spans": []}
+{"text": "Details are on the portal (www.example.org/profile).", "spans": [[27, 50, "url"]]}
+{"text": "Call Hiroshi Petrova on +49 30 9018 2041 or write to 214 Elm Street.", "spans": [[5, 20, "person"], [24, 40, "phone"], [53, 67, "address"]]}
+{"text": "Bitte überweisen Sie den Betrag auf FR0860882798317087378453329 (Kontoinhaber: Fatima Kowalski).", "spans": [[36, 63, "iban"], [79, 94, "person"]]}
+{"text": "Bonjour, ici Aiko Diallo. Rappelez-moi au +33 1 42 68 53 90 ou écrivez à aiko.diallo@corp.example.co.uk.", "spans": [[13, 24, "person"], [42, 59, "phone"], [73, 103, "email"]]}
+{"text": "Hola Chen Mensah, tu pedido llegará a 237 Rue de la Paix, Marseille.", "spans": [[5, 16, "person"], [38, 56, "address"], [58, 67, "location"]]}
+{"text": "Population grew from 1,204,551 to 1,388,902 between 2010 and 2020.", "spans": []}
+{"text": "Server 192.0.2.174 logged a request from 2001:db8:85a3:0:0:8a2e:370:de25 at 09:14.", "spans": [[7, 18, "ip"], [41, 72, "ip"]]}
+{"text": "SSN on file for Sofia Diallo: 858-44-1901.", "spans": [[16, 28, "person"], [30, 41, "ssn"]]}
+{"text": "Tracking number 3052191370645460325780 is live.", "spans": []}
+{"text": "Order 3646108605769472 shipped on 2026-03-14.", "spans": []}
+{"text": "Please email Sofia Moreau at sofia+news@example.org before Friday.", "spans": [[13, 25, "person"], [29, 51, "email"]]}
+{"text": "ISBN 978-3-16-148410-0 is the second edition.", "spans": []}
+{"text": "Hola Liam Iyer, tu pedido llegará a 17 Via Roma, Bogota.", "spans": [[5, 14, "person"], [36, 47, "address"], [49, 55, "location"]]}
+{"text": "Server 192.0.2.204 logged a request from 2001:db8:2a9::6882 at 09:14.", "spans": [[7, 18, "ip"], [41, 59, "ip"]]}
+{"text": "Tracking number 4857756966414456880780 is live.", "spans": []}
+{"text": "Maria Garcia moved from Chennai to Adelaide last year.", "spans": [[0, 12, "person"], [24, 31, "location"], [35, 43, "location"]]}
+{"text": "SSN on file for Nadia Mensah: 319-20-6926.", "spans": [[16, 28, "person"], [30, 41, "ssn"]]}
+{"text": "In Python, a[1::2] takes every second item and b[::3] every third.", "spans": []}
+{"text": "Card 4120 8699 3759 5341 was charged; refund to IBAN GB02WEST07954827018343.", "spans": [[5, 24, "card"], [53, 75, "iban"]]}
+{"text": "In Python, a[1::2] takes every second item and b[::3] every third.", "spans": []}
+{"text": "Hola Lucas Kowalski, tu pedido llegará a 203 Rue de la Paix, Adelaide.", "spans": [[5, 19, "person"], [41, 59, "address"], [61, 69, "location"]]}
+{"text": "Call Ingrid Wang on (415) 555-0113 or write to 245 Oak Lane.", "spans": [[5, 16, "person"], [20, 34, "phone"], [47, 59, "address"]]}
+{"text": "Server 198.51.100.132 logged a request from 2001:db8:4390::940a at 09:14.", "spans": [[7, 21, "ip"], [44, 63, "ip"]]}
+{"text": "The service listens on 127.0.0.1 and 0.0.0.0 by default.", "spans": []}
+{"text": "Commit 2bda919278cbeebb077a77501de7f16e07f17873 fixed it.", "spans": []}
+{"text": "Upgrade to version 2.0.2.71 today.", "spans": []}
+{"text": "Timestamp 1665631362 was recorded.", "spans": []}
+{"text": "Invalid SSN placeholders like 000-00-0000 must be rejected.", "spans": []}
+{"text": "Hola Lucas Jensen, tu pedido llegará a 157 Elm Street, Toronto.", "spans": [[5, 17, "person"], [39, 53, "address"], [55, 62, "location"]]}
+{"text": "Amara Garcia moved from Chennai to Valparaiso last year.", "spans": [[0, 12, "person"], [24, 31, "location"], [35, 45, "location"]]}
+{"text": "Bitte überweisen Sie den Betrag auf NL63 ABNA 6924 3569 39 (Kontoinhaber: Lucas Mensah).", "spans": [[36, 58, "iban"], [74, 86, "person"]]}
+{"text": "SSN on file for Sofia Al-Hassan: 607-28-8018.", "spans": [[16, 31, "person"], [33, 44, "ssn"]]}
+{"text": "SSN on file for Diego Novak: 698-99-6921.", "spans": [[16, 27, "person"], [29, 40, "ssn"]]}
+{"text": "Please email Amara O'Brien at amara.obrien@corp.example.co.uk before Friday.", "spans": [[13, 26, "person"], [30, 61, "email"]]}
+{"text": "Card 349947698014026 was charged; refund to IBAN GB55 WEST 6376 0741 6175 35.", "spans": [[5, 20, "card"], [49, 76, "iban"]]}
+{"text": "Call Aiko Tanaka on +44 20 7946 0945 or write to 59 Rue de la Paix.", "spans": [[5, 16, "person"], [20, 36, "phone"], [49, 66, "address"]]}
+{"text": "Card 5116-0769-7469-5041 was charged; refund to IBAN DE10 9103 2049 0857 6268 54.", "spans": [[5, 24, "card"], [53, 80, "iban"]]}
+{"text": "The bundle costs $5,904.46 for 3 seats.", "spans": []}
+{"text": "Request id 550e8400-e29b-41d4-a716-446655440000 processed.", "spans": []}
+{"text": "ISBN 978-3-16-148410-0 is the second edition.", "spans": []}
+{"text": "The bundle costs $7,219.66 for 3 seats.", "spans": []}
+{"text": "Call Lucas Sharma on +49 30 9018 2015 or write to 176 Oak Lane.", "spans": [[5, 17, "person"], [21, 37, "phone"], [50, 62, "address"]]}
+{"text": "In Python, a[1::2] takes every second item and b[::3] every third.", "spans": []}
+{"text": "Population grew from 1,204,551 to 1,388,902 between 2010 and 2020.", "spans": []}
+{"text": "SSN on file for Aiko Al-Hassan: 156-02-0374.", "spans": [[16, 30, "person"], [32, 43, "ssn"]]}
+{"text": "Please email Maria Petrova at maria.petrova@example.com before Friday.", "spans": [[13, 26, "person"], [30, 55, "email"]]}
+{"text": "In Python, a[1::2] takes every second item and b[::3] every third.", "spans": []}
+{"text": "SSN on file for Amara Rossi: 392-81-5909.", "spans": [[16, 27, "person"], [29, 40, "ssn"]]}
+{"text": "Card 6011 2517 7226 7376 was charged; refund to IBAN FR4148374826404814819700667.", "spans": [[5, 24, "card"], [53, 80, "iban"]]}
+{"text": "Please email Priya Iyer at piyer@example.com before Friday.", "spans": [[13, 23, "person"], [27, 44, "email"]]}
+{"text": "Details are on the portal (https://www.mail.example.net/account?id=205).", "spans": [[27, 70, "url"]]}
+{"text": "ISBN 978-3-16-148410-0 is the second edition.", "spans": []}
+{"text": "Card 5557-4422-3079-6070 was charged; refund to IBAN FR6381114448710746857602601.", "spans": [[5, 24, "card"], [53, 80, "iban"]]}
+{"text": "Request id 550e8400-e29b-41d4-a716-446655440000 processed.", "spans": []}
+{"text": "SSN on file for Maria Wang: 166-84-2311.", "spans": [[16, 26, "person"], [28, 39, "ssn"]]}
+{"text": "The bundle costs $2,120.31 for 3 seats.", "spans": []}
+{"text": "Timestamp 1790210442 was recorded.", "spans": []}
+{"text": "SSN on file for Liam Mensah: 384-39-2762.", "spans": [[16, 27, "person"], [29, 40, "ssn"]]}
+{"text": "ISBN 978-3-16-148410-0 is the second edition.", "spans": []}
+{"text": "Olga Mensah moved from Adelaide to Krakow last year.", "spans": [[0, 11, "person"], [23, 31, "location"], [35, 41, "location"]]}
+{"text": "Bonjour, ici Sofia Tanaka. Rappelez-moi au +33 1 42 68 53 47 ou écrivez à sofia+news@corp.example.co.uk.", "spans": [[13, 25, "person"], [43, 60, "phone"], [74, 103, "email"]]}
+{"text": "Server 198.51.100.159 logged a request from 2001:db8:85a3:0:0:8a2e:370:b105 at 09:14.", "spans": [[7, 21, "ip"], [44, 75, "ip"]]}
+{"text": "Request id 550e8400-e29b-41d4-a716-446655440000 processed.", "spans": []}
+{"text": "In Python, a[1::2] takes every second item and b[::3] every third.", "spans": []}
+{"text": "Invalid SSN placeholders like 000-00-0000 must be rejected.", "spans": []}
+{"text": "ISBN 978-3-16-148410-0 is the second edition.", "spans": []}
+{"text": "Bitte überweisen Sie den Betrag auf DE87 3665 2195 4012 8701 34 (Kontoinhaber: Elena Okafor).", "spans": [[36, 63, "iban"], [79, 91, "person"]]}
+{"text": "Card 5526 1930 7851 2222 was charged; refund to IBAN GB39WEST51127321497152.", "spans": [[5, 24, "card"], [53, 75, "iban"]]}
+{"text": "Bonjour, ici Elena Jensen. Rappelez-moi au +33 1 42 68 53 36 ou écrivez à elena+news@corp.example.co.uk.", "spans": [[13, 25, "person"], [43, 60, "phone"], [74, 103, "email"]]}
+{"text": "Bitte überweisen Sie den Betrag auf NL92ABNA9575568371 (Kontoinhaber: Sofia Moreau).", "spans": [[36, 54, "iban"], [70, 82, "person"]]}
+{"text": "Details are on the portal (http://mail.example.net/users/13).", "spans": [[27, 59, "url"]]}
+{"text": "Please email Priya Haddad at phaddad@example.org before Friday.", "spans": [[13, 25, "person"], [29, 48, "email"]]}
+{"text": "Bitte überweisen Sie den Betrag auf GB79 WEST 3791 3988 1213 38 (Kontoinhaber: Aiko Garcia).", "spans": [[36, 63, "iban"], [79, 90, "person"]]}
+{"text": "SSN on file for Maria Petrova: 878-65-4366.", "spans": [[16, 29, "person"], [31, 42, "ssn"]]}
+{"text": "Details are on the portal (www.mail.example.net/profile).", "spans": [[27, 55, "url"]]}
+{"text": "Population grew from 1,204,551 to 1,388,902 between 2010 and 2020.", "spans": []}
+{"text": "ISBN 978-3-16-148410-0 is the second edition.", "spans": []}
+{"text": "In Python, a[1::2] takes every second item and b[::3] every third.", "spans": []}
+{"text": "Bitte überweisen Sie den Betrag auf GB70WEST60337529790102 (Kontoinhaber: Elena Rossi).", "spans": [[36, 58, "iban"], [74, 85, "person"]]}
+{"text": "Details are on the portal (www.mail.example.net/profile).", "spans": [[27, 55, "url"]]}
+{"text": "Liam Haddad moved from Marseille to Nairobi last year.", "spans": [[0, 11, "person"], [23, 32, "location"], [36, 43, "location"]]}
+{"text": "Details are on the portal (https://www.corp.example.co.uk/account?id=388).", "spans": [[27, 72, "url"]]}
+{"text": "Kwame Al-Hassan moved from Valparaiso to Chennai last year.", "spans": [[0, 15, "person"], [27, 37, "location"], [41, 48, "location"]]}
+{"text": "Hola Tomasz Lindqvist, tu pedido llegará a 12 Hauptstrasse, Adelaide.", "spans": [[5, 21, "person"], [43, 58, "address"], [60, 68, "location"]]}
+{"text": "Please email Olga Moreau at omoreau@example.com before Friday.", "spans": [[13, 24, "person"], [28, 47, "email"]]}
+{"text": "Request id 550e8400-e29b-41d4-a716-446655440000 processed.", "spans": []}
+{"text": "Bonjour, ici Aiko Tanaka. Rappelez-moi au (646) 555-0122 ou écrivez à aiko.tanaka@mail.example.net.", "spans": [[13, 24, "person"], [42, 56, "phone"], [70, 98, "email"]]}
+{"text": "Hola Hiroshi Kowalski, tu pedido llegará a 46 Rue de la Paix, Chennai.", "spans": [[5, 21, "person"], [43, 60, "address"], [62, 69, "location"]]}
+{"text": "Request id 550e8400-e29b-41d4-a716-446655440000 processed.", "spans": []}
+{"text": "Please email Maria Garcia at maria+news@mail.example.net before Friday.", "spans": [[13, 25, "person"], [29, 56, "email"]]}
+{"text": "Liam Nakamura moved from Bogota to Chennai last year.", "spans": [[0, 13, "person"], [25, 31, "location"], [35, 42, "location"]]}
+{"text": "Hiroshi Nakamura moved from Lisbon to Bogota last year.", "spans": [[0, 16, "person"], [28, 34, "location"], [38, 44, "location"]]}
+{"text": "Bonjour, ici Aiko Iyer. Rappelez-moi au 646-555-0175 ou écrivez à aiko.iyer@corp.example.co.uk.", "spans": [[13, 22, "person"], [40, 52, "phone"], [66, 94, "email"]]}
+{"text": "Mohammed Smith moved from Marseille to Lisbon last year.", "spans": [[0, 14, "person"], [26, 35, "location"], [39, 45, "location"]]}
+{"text": "Invalid SSN placeholders like 000-00-0000 must be rejected.", "spans": []}
+{"text": "The service listens on 127.0.0.1 and 0.0.0.0 by default.", "spans": []}
+{"text": "Commit 2ea8e554d408bd17b95f1ea1f9cb32831a7c37f4 fixed it.", "spans": []}
+{"text": "Server 192.0.2.20 logged a request from 2001:db8:85a3:0:0:8a2e:370:b1 at 09:14.", "spans": [[7, 17, "ip"], [40, 69, "ip"]]}
+{"text": "Card 3451-416317-33702 was charged; refund to IBAN DE73213207970435686715.", "spans": [[5, 22, "card"], [51, 73, "iban"]]}
+{"text": "Bonjour, ici Aiko Tanaka. Rappelez-moi au +44 20 7946 0976 ou écrivez à atanaka@example.org.", "spans": [[13, 24, "person"], [42, 58, "phone"], [72, 91, "email"]]}
+{"text": "Call Ravi Iyer on +44 20 7946 0973 or write to 202 Maple Avenue.", "spans": [[5, 14, "person"], [18, 34, "phone"], [47, 63, "address"]]}
+{"text": "Bitte überweisen Sie den Betrag auf NL45ABNA5131726259 (Kontoinhaber: Hiroshi Garcia).", "spans": [[36, 54, "iban"], [70, 84, "person"]]}
+{"text": "Please email Mohammed Rossi at mohammed+news@example.org before Friday.", "spans": [[13, 27, "person"], [31, 56, "email"]]}
+{"text": "Timestamp 1716315048 was recorded.", "spans": []}
+{"text": "Server 10.195.26.54 logged a request from 2001:db8:85a3:0:0:8a2e:370:681c at 09:14.", "spans": [[7, 19, "ip"], [42, 73, "ip"]]}
+{"text": "The bundle costs $8,199.36 for 3 seats.", "spans": []}
+{"text": "ISBN 978-3-16-148410-0 is the second edition.", "spans": []}
+{"text": "ISBN 978-3-16-148410-0 is the second edition.", "spans": []}
+{"text": "Please email Ingrid Okafor at iokafor@mail.example.net before Friday.", "spans": [[13, 26, "person"], [30, 54, "email"]]}
+{"text": "Order 3859758666042874 shipped on 2026-03-14.", "spans": []}
+{"text": "Hola Priya Moreau, tu pedido llegará a 207 Calle Mayor, Tromso.", "spans": [[5, 17, "person"], [39, 54, "address"], [56, 62, "location"]]}
+{"text": "Hola Aiko Sharma, tu pedido llegará a 245 Rue de la Paix, Marseille.", "spans": [[5, 16, "person"], [38, 56, "address"], [58, 67, "location"]]}
+{"text": "Details are on the portal (www.mail.example.net/profile).", "spans": [[27, 55, "url"]]}
+{"text": "Sofia Tanaka moved from Leipzig to Lisbon last year.", "spans": [[0, 12, "person"], [24, 31, "location"], [35, 41, "location"]]}
+{"text": "Please email Lucas Rossi at lrossi@mail.example.net before Friday.", "spans": [[13, 24, "person"], [28, 51, "email"]]}
+{"text": "Request id 550e8400-e29b-41d4-a716-446655440000 processed.", "spans": []}
+{"text": "Call Priya Jensen on 415-555-0180 or write to 23 Elm Street.", "spans": [[5, 17, "person"], [21, 33, "phone"], [46, 59, "address"]]}
+{"text": "The service listens on 127.0.0.1 and 0.0.0.0 by default.", "spans": []}
+{"text": "Upgrade to version 4.6.4.4 today.", "spans": []}
+{"text": "Upgrade to version 3.1.0.18 today.", "spans": []}
+{"text": "The bundle costs $8,935.81 for 3 seats.", "spans": []}
+{"text": "The bundle costs $8,232.86 for 3 seats.", "spans": []}
+{"text": "Upgrade to version 6.3.5.79 today.", "spans": []}
+{"text": "Bonjour, ici Ravi Haddad. Rappelez-moi au 646.555.0195 ou écrivez à ravi+news@corp.example.co.uk.", "spans": [[13, 24, "person"], [42, 54, "phone"], [68, 96, "email"]]}
+{"text": "Bonjour, ici Elena Al-Hassan. Rappelez-moi au +33 1 42 68 53 91 ou écrivez à elena+news@corp.example.co.uk.", "spans": [[13, 28, "person"], [46, 63, "phone"], [77, 106, "email"]]}
+{"text": "Hola Diego Sharma, tu pedido llegará a 136 Calle Mayor, Leipzig.", "spans": [[5, 17, "person"], [39, 54, "address"], [56, 63, "location"]]}
+{"text": "Tracking number 8367715153614589483691 is live.", "spans": []}
+{"text": "Upgrade to version 5.7.0.30 today.", "spans": []}
+{"text": "Timestamp 1751023861 was recorded.", "spans": []}
+{"text": "Invalid SSN placeholders like 000-00-0000 must be rejected.", "spans": []}
+{"text": "Card 6011131613534384 was charged; refund to IBAN GB51 WEST 7785 9104 4407 17.", "spans": [[5, 21, "card"], [50, 77, "iban"]]}
+{"text": "Card 5348 3587 8505 9348 was charged; refund to IBAN DE68 9547 1665 8914 8196 85.", "spans": [[5, 24, "card"], [53, 80, "iban"]]}
+{"text": "Call Hiroshi Lindqvist on +33 1 42 68 53 86 or write to 179 Rue de la Paix.", "spans": [[5, 22, "person"], [26, 43, "phone"], [56, 74, "address"]]}
+{"text": "Card 4504-9656-1940-2529 was charged; refund to IBAN FR97 3216 5727 2628 4137 6423 126.", "spans": [[5, 24, "card"], [53, 86, "iban"]]}
+{"text": "Bitte überweisen Sie den Betrag auf NL30 ABNA 4117 4784 27 (Kontoinhaber: Ingrid Nakamura).", "spans": [[36, 58, "iban"], [74, 89, "person"]]}
+{"text": "Bonjour, ici Ingrid Haddad. Rappelez-moi au +1 415 555 0135 ou écrivez à ingrid+news@example.org.", "spans": [[13, 26, "person"], [44, 59, "phone"], [73, 96, "email"]]}
+{"text": "The bundle costs $9,491.14 for 3 seats.", "spans": []}
+{"text": "Tracking number 6235943778852961104386 is live.", "spans": []}
+{"text": "Server 10.166.240.160 logged a request from 2001:db8:85a3:0:0:8a2e:370:3e22 at 09:14.", "spans": [[7, 21, "ip"], [44, 75, "ip"]]}
+{"text": "Bitte überweisen Sie den Betrag auf DE39 8328 2297 6162 8817 84 (Kontoinhaber: Olga Al-Hassan).", "spans": [[36, 63, "iban"], [79, 93, "person"]]}
+{"text": "Server 192.0.2.53 logged a request from 2001:db8:b8f0::622e at 09:14.", "spans": [[7, 17, "ip"], [40, 59, "ip"]]}
+{"text": "Hola Kwame Novak, tu pedido llegará a 52 King Road, Bogota.", "spans": [[5, 16, "person"], [38, 50, "address"], [52, 58, "location"]]}
+{"text": "Hola Sofia Al-Hassan, tu pedido llegará a 139 Calle Mayor, Toronto.", "spans": [[5, 20, "person"], [42, 57, "address"], [59, 66, "location"]]}
+{"text": "Bitte überweisen Sie den Betrag auf NL49 ABNA 9450 4925 92 (Kontoinhaber: Fatima Mensah).", "spans": [[36, 58, "iban"], [74, 87, "person"]]}
+{"text": "Commit 857c52fce991518ebf6b1815f794657b9d126112 fixed it.", "spans": []}
+{"text": "Order 3983997357888829 shipped on 2026-03-14.", "spans": []}
+{"text": "Card 4328 5975 0179 1182 was charged; refund to IBAN DE53 1888 7959 5791 4031 13.", "spans": [[5, 24, "card"], [53, 80, "iban"]]}
+{"text": "Timestamp 1750427784 was recorded.", "spans": []}
+{"text": "Kwame Diallo moved from Osaka to Marseille last year.", "spans": [[0, 12, "person"], [24, 29, "location"], [33, 42, "location"]]}
+{"text": "Hola Hiroshi Lindqvist, tu pedido llegará a 230 Maple Avenue, Valparaiso.", "spans": [[5, 22, "person"], [44, 60, "address"], [62, 72, "location"]]}
+{"text": "Details are on the portal (www.corp.example.co.uk/profile).", "spans": [[27, 57, "url"]]}
+{"text": "The service listens on 127.0.0.1 and 0.0.0.0 by default.", "spans": []}
+{"text": "Call Chen Garcia on (415) 555-0164 or write to 120 Hauptstrasse.", "spans": [[5, 16, "person"], [20, 34, "phone"], [47, 63, "address"]]}
+{"text": "Request id 550e8400-e29b-41d4-a716-446655440000 processed.", "spans": []}
+{"text": "Bonjour, ici Ravi Al-Hassan. Rappelez-moi au 212.555.0181 ou écrivez à ral-hassan@mail.example.net.", "spans": [[13, 27, "person"], [45, 57, "phone"], [71, 98, "email"]]}
+{"text": "Call Fatima Mensah on +33 1 42 68 53 47 or write to 145 Rue de la Paix.", "spans": [[5, 18, "person"], [22, 39, "phone"], [52, 70, "address"]]}
+{"text": "ISBN 978-3-16-148410-0 is the second edition.", "spans": []}
+{"text": "In Python, a[1::2] takes every second item and b[::3] every third.", "spans": []}
+{"text": "Commit 79edc75dee293b9957396727f80681b2735a435f fixed it.", "spans": []}
+{"text": "In Python, a[1::2] takes every second item and b[::3] every third.", "spans": []}
+{"text": "Card 6011-5126-9220-6335 was charged; refund to IBAN DE88 7526 4008 5398 2309 58.", "spans": [[5, 24, "card"], [53, 80, "iban"]]}
+{"text": "Please email Olga Sharma at olga+news@example.org before Friday.", "spans": [[13, 24, "person"], [28, 49, "email"]]}
+{"text": "Timestamp 1669570012 was recorded.", "spans": []}
+{"text": "Hola Mohammed Smith, tu pedido llegará a 68 Hauptstrasse, Krakow.", "spans": [[5, 19, "person"], [41, 56, "address"], [58, 64, "location"]]}
+{"text": "Aiko Mensah moved from Chennai to Osaka last year.", "spans": [[0, 11, "person"], [23, 30, "location"], [34, 39, "location"]]}
+{"text": "The service listens on 127.0.0.1 and 0.0.0.0 by default.", "spans": []}
+{"text": "Bonjour, ici Fatima Moreau. Rappelez-moi au 415.555.0112 ou écrivez à fmoreau@example.com.", "spans": [[13, 26, "person"], [44, 56, "phone"], [70, 89, "email"]]}
+{"text": "SSN on file for Maria Moreau: 128-41-5850.", "spans": [[16, 28, "person"], [30, 41, "ssn"]]}
+{"text": "Upgrade to version 7.8.2.91 today.", "spans": []}
+{"text": "Call Priya Lindqvist on 415-555-0161 or write to 193 Elm Street.", "spans": [[5, 20, "person"], [24, 36, "phone"], [49, 63, "address"]]}
+{"text": "The bundle costs $308.85 for 3 seats.", "spans": []}
+{"text": "Card 373500617324957 was charged; refund to IBAN DE60082039263547821101.", "spans": [[5, 20, "card"], [49, 71, "iban"]]}
+{"text": "The service listens on 127.0.0.1 and 0.0.0.0 by default.", "spans": []}
+{"text": "Details are on the portal (www.corp.example.co.uk/profile).", "spans": [[27, 57, "url"]]}
+{"text": "Server 198.51.100.81 logged a request from 2001:db8:e162::519f at 09:14.", "spans": [[7, 20, "ip"], [43, 62, "ip"]]}
+{"text": "ISBN 978-3-16-148410-0 is the second edition.", "spans": []}
+{"text": "ISBN 978-3-16-148410-0 is the second edition.", "spans": []}
+{"text": "Call Elena Rossi on +49 30 9018 2065 or write to 58 Elm Street.", "spans": [[5, 16, "person"], [20, 36, "phone"], [49, 62, "address"]]}
+{"text": "The service listens on 127.0.0.1 and 0.0.0.0 by default.", "spans": []}
+{"text": "Server 10.88.53.135 logged a request from 2001:db8:49a4::312a at 09:14.", "spans": [[7, 19, "ip"], [42, 61, "ip"]]}
+{"text": "Commit 528330216c606b250cb195dcc5fcc5ec1fa84791 fixed it.", "spans": []}
+{"text": "SSN on file for Aiko Jensen: 601-07-9578.", "spans": [[16, 27, "person"], [29, 40, "ssn"]]}
+{"text": "Call Mohammed Lindqvist on +49 30 9018 2037 or write to 87 Maple Avenue.", "spans": [[5, 23, "person"], [27, 43, "phone"], [56, 71, "address"]]}
+{"text": "ISBN 978-3-16-148410-0 is the second edition.", "spans": []}
+{"text": "Call Elena Wang on +49 30 9018 2050 or write to 106 Elm Street.", "spans": [[5, 15, "person"], [19, 35, "phone"], [48, 62, "address"]]}
+{"text": "Card 6011820502088417 was charged; refund to IBAN FR34 3374 9425 9432 3687 7700 741.", "spans": [[5, 21, "card"], [50, 83, "iban"]]}
+{"text": "Card 347091345084405 was charged; refund to IBAN FR61 2390 0514 9672 8824 6394 071.", "spans": [[5, 20, "card"], [49, 82, "iban"]]}
+{"text": "Bonjour, ici Lucas Al-Hassan. Rappelez-moi au +1 415 555 0174 ou écrivez à lucas+news@example.com.", "spans": [[13, 28, "person"], [46, 61, "phone"], [75, 97, "email"]]}
+{"text": "Server 10.9.123.51 logged a request from 2001:db8:85a3:0:0:8a2e:370:581f at 09:14.", "spans": [[7, 18, "ip"], [41, 72, "ip"]]}
+{"text": "Lucas Al-Hassan moved from Chennai to Krakow last year.", "spans": [[0, 15, "person"], [27, 34, "location"], [38, 44, "location"]]}
+{"text": "Details are on the portal (www.example.org/profile).", "spans": [[27, 50, "url"]]}
+{"text": "Request id 550e8400-e29b-41d4-a716-446655440000 processed.", "spans": []}
+{"text": "Invalid SSN placeholders like 000-00-0000 must be rejected.", "spans": []}
+{"text": "Bitte überweisen Sie den Betrag auf DE07960045547149398924 (Kontoinhaber: Nadia Rossi).", "spans": [[36, 58, "iban"], [74, 85, "person"]]}
+{"text": "Request id 550e8400-e29b-41d4-a716-446655440000 processed.", "spans": []}
+{"text": "Please email Ravi Smith at ravi+news@example.org before Friday.", "spans": [[13, 23, "person"], [27, 48, "email"]]}
+{"text": "Call Aiko Wang on (212) 555-0154 or write to 207 Rue de la Paix.", "spans": [[5, 14, "person"], [18, 32, "phone"], [45, 63, "address"]]}
+{"text": "Please email Elena Kowalski at elena+news@mail.example.net before Friday.", "spans": [[13, 27, "person"], [31, 58, "email"]]}
+{"text": "Server 10.129.182.218 logged a request from 2001:db8:1dbc::bf46 at 09:14.", "spans": [[7, 21, "ip"], [44, 63, "ip"]]}
+{"text": "Order 5302866241539003 shipped on 2026-03-14.", "spans": []}
+{"text": "Call Ravi Iyer on +49 30 9018 2023 or write to 8 Calle Mayor.", "spans": [[5, 14, "person"], [18, 34, "phone"], [47, 60, "address"]]}
+{"text": "Server 10.242.132.4 logged a request from 2001:db8:bfe6::afb5 at 09:14.", "spans": [[7, 19, "ip"], [42, 61, "ip"]]}
+{"text": "Bitte überweisen Sie den Betrag auf NL64 ABNA 9402 9100 39 (Kontoinhaber: Nadia Jensen).", "spans": [[36, 58, "iban"], [74, 86, "person"]]}
+{"text": "Bitte überweisen Sie den Betrag auf FR7207140500738686238862188 (Kontoinhaber: Lucas Petrova).", "spans": [[36, 63, "iban"], [79, 92, "person"]]}
+{"text": "Details are on the portal (http://corp.example.co.uk/users/46).", "spans": [[27, 61, "url"]]}
+{"text": "Details are on the portal (www.example.com/profile).", "spans": [[27, 50, "url"]]}
+{"text": "In Python, a[1::2] takes every second item and b[::3] every third.", "spans": []}
+{"text": "Amara Garcia moved from Chennai to Toronto last year.", "spans": [[0, 12, "person"], [24, 31, "location"], [35, 42, "location"]]}
+{"text": "SSN on file for Lucas Mensah: 642-28-8760.", "spans": [[16, 28, "person"], [30, 41, "ssn"]]}
+{"text": "SSN on file for Diego Wang: 166-68-7601.", "spans": [[16, 26, "person"], [28, 39, "ssn"]]}
+{"text": "Hola Sofia Rossi, tu pedido llegará a 43 King Road, Tromso.", "spans": [[5, 16, "person"], [38, 50, "address"], [52, 58, "location"]]}
+{"text": "SSN on file for Fatima Nakamura: 743-87-7874.", "spans": [[16, 31, "person"], [33, 44, "ssn"]]}
+{"text": "Call Ingrid Lindqvist on +33 1 42 68 53 27 or write to 123 King Road.", "spans": [[5, 21, "person"], [25, 42, "phone"], [55, 68, "address"]]}
+{"text": "Hola Ravi Smith, tu pedido llegará a 124 King Road, Leipzig.", "spans": [[5, 15, "person"], [37, 50, "address"], [52, 59, "location"]]}
+{"text": "Server 192.0.2.29 logged a request from 2001:db8:c4ad::1c32 at 09:14.", "spans": [[7, 17, "ip"], [40, 59, "ip"]]}
+{"text": "Tracking number 2073011495833646434268 is live.", "spans": []}
+{"text": "Hola Amara Tanaka, tu pedido llegará a 209 Hauptstrasse, Osaka.", "spans": [[5, 17, "person"], [39, 55, "address"], [57, 62, "location"]]}
+{"text": "Upgrade to version 8.5.3.79 today.", "spans": []}
+{"text": "SSN on file for Elena Wang: 170-06-6756.", "spans": [[16, 26, "person"], [28, 39, "ssn"]]}
+{"text": "Tracking number 2326264408995199877791 is live.", "spans": []}
+{"text": "Bonjour, ici Amara Kowalski. Rappelez-moi au +49 30 9018 2028 ou écrivez à akowalski@corp.example.co.uk.", "spans": [[13, 27, "person"], [45, 61, "phone"], [75, 103, "email"]]}
+{"text": "Mohammed Lindqvist moved from Marseille to Lisbon last year.", "spans": [[0, 18, "person"], [30, 39, "location"], [43, 49, "location"]]}
+{"text": "Tracking number 3295095639776472352374 is live.", "spans": []}
+{"text": "SSN on file for Ingrid Rossi: 213-34-5341.", "spans": [[16, 28, "person"], [30, 41, "ssn"]]}
+{"text": "The service listens on 127.0.0.1 and 0.0.0.0 by default.", "spans": []}
+{"text": "Card 6011448597610380 was charged; refund to IBAN NL64 ABNA 6016 4938 60.", "spans": [[5, 21, "card"], [50, 72, "iban"]]}
+{"text": "Bitte überweisen Sie den Betrag auf GB30 WEST 5051 3609 0990 37 (Kontoinhaber: Liam Moreau).", "spans": [[36, 63, "iban"], [79, 90, "person"]]}
+{"text": "Call Diego Novak on 646-555-0182 or write to 171 Via Roma.", "spans": [[5, 16, "person"], [20, 32, "phone"], [45, 57, "address"]]}
+{"text": "In Python, a[1::2] takes every second item and b[::3] every third.", "spans": []}
+{"text": "In Python, a[1::2] takes every second item and b[::3] every third.", "spans": []}
+{"text": "Details are on the portal (https://www.example.com/account?id=324).", "spans": [[27, 65, "url"]]}

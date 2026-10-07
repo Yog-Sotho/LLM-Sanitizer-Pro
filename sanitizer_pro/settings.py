@@ -16,8 +16,8 @@ PiiPattern = Tuple['re.Pattern[str]', str, str]          # (compiled regex, toke
 FieldOps = Tuple[Dict[str, str], Set[str], Set[str], Set[str]]  # renames, drops, pii_only, no_clean
 
 DEDUP_BACKENDS = ('memory', 'sqlite')
-QUALITY_SCORERS = ('heuristic', 'perplexity')
-NER_BACKENDS = ('auto', 'spacy', 'transformers')
+QUALITY_SCORERS = ('heuristic', 'perplexity', 'fineweb-edu', 'dclm', 'fasttext')
+NER_BACKENDS = ('auto', 'spacy', 'transformers', 'gliner')
 
 
 @dataclass
@@ -33,6 +33,7 @@ class SanitizerConfig:
     pii_ner_backend: str = 'auto'
     pii_ner_entities: Tuple[str, ...] = ('person',)
     pii_ner_model: Optional[str] = None
+    pii_ner_threshold: float = 0.5        # GLiNER confidence threshold
     redact_secrets: bool = False
     extra_pii_patterns: Optional[List[PiiPattern]] = None
 
@@ -52,10 +53,13 @@ class SanitizerConfig:
     max_depth: int = _MAX_DEPTH_DEFAULT
     text_fields_depth: int = 20
     quality_script: Optional[str] = None  # path to a module defining quality_check(record)
+    quality_rules: Optional[List[str]] = None  # gopher, gopher-repetition, c4, fineweb, all
 
     # Language
-    lang_filter: Optional[List[str]] = None
+    lang_filter: Optional[List[str]] = None   # ISO 639-1/-3 codes, e.g. ['en', 'zh']
     lang_confidence: float = 0.0
+    lang_backend: str = 'auto'                # auto | glotlid | openlid | langdetect
+    lang_model: Optional[str] = None          # local fastText model path override
 
     # Deduplication
     deduplicate: bool = False
@@ -84,8 +88,9 @@ class SanitizerConfig:
     chat_roles: Tuple[str, ...] = ('system', 'user', 'assistant')
 
     # Quality scoring
-    quality_scorer: str = 'heuristic'
+    quality_scorer: str = 'heuristic'           # see QUALITY_SCORERS
     quality_model: Optional[str] = None
+    quality_label: Optional[str] = None         # positive label for 'fasttext'
     quality_min_score: Optional[float] = None
     keep_top_percent: Optional[float] = None
     quality_score_field: Optional[str] = None
@@ -131,18 +136,25 @@ class SanitizerConfig:
                  f"quality_scorer must be one of {list(QUALITY_SCORERS)}.")
         _require(self.pii_ner_backend in NER_BACKENDS,
                  f"pii_ner_backend must be one of {list(NER_BACKENDS)}.")
+        _require(0 < self.pii_ner_threshold <= 1, "pii_ner_threshold must be in (0, 1].")
         _require(self.chat_max_tokens is None or self.chat_max_tokens >= 1,
                  "chat_max_tokens must be >= 1.")
         _require(not self.validate_chat or any(r.strip() for r in self.chat_roles),
                  "chat_roles must name at least one role.")
         _require(self.max_tokens is None or self.max_tokens >= 1, "max_tokens must be >= 1.")
+        if self.quality_rules:
+            from sanitizer_pro.rules import resolve_rule_sets
+            self.quality_rules = resolve_rule_sets(self.quality_rules)
         _require(self.decontam_ngram >= 2, "decontam_ngram must be >= 2.")
         _require(self.decontam_min_hits >= 1, "decontam_min_hits must be >= 1.")
+        from sanitizer_pro.langid import LANG_BACKENDS, language_backend_available
+        _require(self.lang_backend in LANG_BACKENDS,
+                 f"lang_backend must be one of {list(LANG_BACKENDS)}.")
         if self.lang_filter:
-            from sanitizer_pro.quality import LANGDETECT_AVAILABLE
-            _require(LANGDETECT_AVAILABLE,
-                     "lang_filter requires langdetect (pip install langdetect); "
-                     "without it every record would be filtered out.")
+            _require(language_backend_available(self.lang_backend),
+                     f"lang_filter needs a language-ID backend ({self.lang_backend}): "
+                     "pip install 'llm-sanitizer-pro[lang]' (GlotLID, fastText) or "
+                     "pip install langdetect; without one every record would be filtered out.")
 
     def warnings(self) -> List[str]:
         """Settings that are valid but have no effect."""
@@ -168,7 +180,8 @@ class SanitizerConfig:
         )
         ns = vars(args)
         values: Dict[str, Any] = {f.name: ns[f.name] for f in fields(cls) if f.name in ns}
-        for name in ('text_fields', 'require_fields', 'dedup_fields', 'decontam_refs'):
+        for name in ('text_fields', 'require_fields', 'dedup_fields', 'decontam_refs',
+                     'quality_rules'):
             values[name] = as_list(ns.get(name))
         values['lang_filter'] = [x.lower() for x in as_list(ns.get('lang_filter')) or []] or None
         values['decontaminate'] = as_list(ns.get('decontaminate'))

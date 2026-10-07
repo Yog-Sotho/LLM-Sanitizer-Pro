@@ -19,7 +19,10 @@ class RunStats:
         self.filtered_code = 0
         self.filtered_profanity = 0
         self.filtered_contaminated = 0
+        self.contaminated_by: Dict[str, int] = {}
         self.filtered_chat = 0
+        self.filtered_rules = 0
+        self.rule_failures: Dict[str, int] = {}
         self.chat_invalid_reasons: Dict[str, int] = {}
         self.filtered_low_score = 0
         self.score_hist: Dict[int, int] = {}
@@ -83,7 +86,10 @@ class RunStats:
             'filtered_code': self.filtered_code,
             'filtered_profanity': self.filtered_profanity,
             'filtered_contaminated': self.filtered_contaminated,
+            'contaminated_by': dict(sorted(self.contaminated_by.items(), key=lambda x: -x[1])),
             'filtered_chat_invalid': self.filtered_chat,
+            'filtered_rules': self.filtered_rules,
+            'rule_failures': dict(sorted(self.rule_failures.items(), key=lambda x: -x[1])),
             'chat_invalid_reasons': dict(sorted(self.chat_invalid_reasons.items(),
                                                 key=lambda x: -x[1])),
             'filtered_low_score': self.filtered_low_score,
