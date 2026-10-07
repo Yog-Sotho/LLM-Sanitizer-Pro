@@ -1,6 +1,8 @@
 """Run statistics shared by the CLI and the Python API."""
 from typing import Any, Dict, Optional
 
+from sanitizer_pro.quality import words_of
+
 _CHAR_BUCKETS = [0, 50, 100, 200, 500, 1000, 2000, 5000, 10000, 20000]
 _WORD_BUCKETS = [0, 5, 10, 25, 50, 100, 250, 500, 1000, 2500]
 
@@ -41,7 +43,7 @@ class RunStats:
         n = len(text)
         bucket = next((b for b in reversed(_CHAR_BUCKETS) if n >= b), _CHAR_BUCKETS[0])
         self.char_hist[bucket] += 1
-        w = len(text.split())
+        w = len(words_of(text))
         wbucket = next((b for b in reversed(_WORD_BUCKETS) if w >= b), _WORD_BUCKETS[0])
         self.word_hist[wbucket] += 1
         if lang:

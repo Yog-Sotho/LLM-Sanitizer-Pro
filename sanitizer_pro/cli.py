@@ -139,7 +139,9 @@ def build_parser() -> argparse.ArgumentParser:
     qg.add_argument('--min-chars', type=int, default=50)
     qg.add_argument('--max-chars', type=int, default=20000)
     qg.add_argument('--min-words', type=int, default=8)
-    qg.add_argument('--min-ascii-ratio', type=float, default=0.85)
+    qg.add_argument('--min-ascii-ratio', type=float, default=0.0,
+                    help='Reject records whose ASCII-character share is below this '
+                         '(0 = off, the default; e.g. 0.85 keeps mostly-English text).')
     qg.add_argument('--min-unique-ratio', type=float, default=0.25)
     qg.add_argument('--text-fields', default='', help='Comma-separated fields for quality scoring.')
     qg.add_argument('--text-fields-depth', type=int, default=20)

@@ -47,7 +47,7 @@ class SanitizerConfig:
     min_chars: int = 50
     max_chars: int = 20000
     min_words: int = 8
-    min_ascii_ratio: float = 0.85
+    min_ascii_ratio: float = 0.0          # 0 = off (non-English text is kept)
     min_unique_ratio: float = 0.25
     reject_allcaps: bool = False
     allcaps_min_len: int = 50

@@ -78,3 +78,45 @@ class TestProfanity:
 
     def test_clean(self):
         assert not contains_profanity("a perfectly polite sentence")
+
+
+MULTILINGUAL = {
+    'zh': "这是一个完全正常的中文句子，用于测试默认的质量过滤器是否会错误地拒绝非英语数据。这里有足够的字符和内容。",
+    'ja': "これは日本語の文章で、品質フィルターが正しく動作するかどうかを確認するためのものです。よろしくお願いします。",
+    'ru': "Привет, это совершенно нормальное предложение на русском языке для проверки фильтров качества.",
+    'ar': "هذه جملة عربية عادية تماما تستخدم لاختبار ما إذا كانت مرشحات الجودة تعمل بشكل صحيح.",
+    'th': "นี่คือประโยคภาษาไทยปกติที่ใช้ทดสอบว่าตัวกรองคุณภาพทำงานได้อย่างถูกต้องหรือไม่",
+}
+
+
+class TestMultilingualDefaults:
+    """Default gates must not discard text just because it isn't English."""
+
+    def _cli_defaults(self):
+        from sanitizer_pro.cli import build_parser
+        return build_parser().parse_args(['--input', 'x', '--output', 'y'])
+
+    def test_default_gates_keep_non_english(self):
+        args = self._cli_defaults()
+        for lang, text in MULTILINGUAL.items():
+            assert _check_quality_reason(text, args) is None, lang
+
+    def test_api_defaults_match_cli(self):
+        from sanitizer_pro import SanitizerConfig
+        assert SanitizerConfig().min_ascii_ratio == self._cli_defaults().min_ascii_ratio == 0.0
+
+    def test_ascii_gate_still_available(self):
+        args = self._cli_defaults()
+        args.min_ascii_ratio = 0.85
+        assert 'ASCII' in _check_quality_reason(MULTILINGUAL['ru'], args)
+
+    def test_unspaced_scripts_count_per_character(self):
+        from sanitizer_pro.quality import words_of
+        assert len(words_of("中文句子")) == 4
+        assert words_of("GPT-4 和 Claude 很强") == ['GPT', '4', '和', 'Claude', '很', '强']
+        assert words_of("plain english words") == ['plain', 'english', 'words']
+
+    def test_cjk_too_few_words_still_rejected(self):
+        args = self._cli_defaults()
+        args.min_chars = 1
+        assert 'too few words' in _check_quality_reason("你好", args)
