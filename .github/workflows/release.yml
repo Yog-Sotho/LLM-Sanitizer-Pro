@@ -1,6 +1,8 @@
 name: Release
 
-# Build, sign and publish when a version tag is pushed (e.g. v4.0.0).
+# Build, sign and publish when a version tag is pushed (e.g. v4.0.0), or run
+# it by hand from main with the version as input: then the GitHub release
+# step creates the tag on the commit that was built.
 # PyPI uses Trusted Publishing (OIDC): no API token is stored in the repo.
 # One-time setup: add this repo + workflow as a trusted publisher at
 # https://pypi.org/manage/project/llm-sanitizer-pro/settings/publishing/
@@ -10,12 +12,21 @@ on:
   push:
     tags:
       - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to release from main (e.g. 4.0.0); must match __version__'
+        required: true
+
+env:
+  TAG: ${{ github.event_name == 'workflow_dispatch' && format('v{0}', inputs.version) || github.ref_name }}
 
 permissions:
   contents: read
 
 jobs:
   build:
+    if: github.event_name == 'push' || github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -34,7 +45,7 @@ jobs:
       - name: Tag matches the built version
         run: |
           version=$(basename dist/*.whl | cut -d- -f2)
-          test "v$version" = "$GITHUB_REF_NAME" || { echo "tag $GITHUB_REF_NAME != v$version"; exit 1; }
+          test "v$version" = "$TAG" || { echo "tag $TAG != v$version"; exit 1; }
       - name: SBOM (CycloneDX) of the wheel with all extras
         run: |
           python -m venv /tmp/sbom-env
@@ -43,7 +54,7 @@ jobs:
           cyclonedx-py environment /tmp/sbom-env/bin/python --output-format JSON \
             --output-file sbom.cdx.json
       - name: Release notes from CHANGELOG.md
-        run: python scripts/release_notes.py "$GITHUB_REF_NAME" > release-notes.md
+        run: python scripts/release_notes.py "$TAG" > release-notes.md
       - name: Build provenance (SLSA, GitHub attestations)
         uses: actions/attest-build-provenance@v2
         with:
@@ -103,6 +114,6 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" \
-            --title "$GITHUB_REF_NAME" --notes-file assets/release-notes.md \
+          gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
+            --title "$TAG" --notes-file assets/release-notes.md \
             assets/*.tar.gz assets/*.whl assets/*.sigstore.json assets/sbom.cdx.json

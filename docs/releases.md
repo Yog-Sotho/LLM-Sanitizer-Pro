@@ -1,6 +1,6 @@
 # Releases
 
-Releases are built and published by `.github/workflows/release.yml` when a `v*` tag is pushed. The workflow:
+Releases are built and published by `.github/workflows/release.yml`. It runs when a `v*` tag is pushed, or by hand from `main` (Actions → Release → Run workflow, with the version). The manual run creates the tag on the commit it built. The workflow:
 
 1. checks that the tag matches `sanitizer_pro.__version__`;
 2. builds the sdist and wheel and runs `twine check`;
@@ -25,4 +25,4 @@ python -m sigstore verify github llm_sanitizer_pro-4.0.0-py3-none-any.whl \
 
 1. Move the `Unreleased` section of `CHANGELOG.md` under a `## X.Y.Z (date)` heading.
 2. Set `__version__` in `sanitizer_pro/__init__.py`.
-3. Merge to `main`, then `git tag vX.Y.Z && git push origin vX.Y.Z`.
+3. Merge to `main`, then either `git tag vX.Y.Z && git push origin vX.Y.Z`, or run the Release workflow on `main` with version `X.Y.Z`.
