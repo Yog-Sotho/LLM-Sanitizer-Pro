@@ -10,7 +10,7 @@ import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, Iterable, Iterator, List, Optional
+from typing import Any, Dict, Iterable, Iterator, List, Optional, Set
 
 try:
     from tqdm import tqdm as _tqdm
@@ -34,7 +34,9 @@ from sanitizer_pro.settings import (
     SanitizerConfig, as_list,
 )
 from sanitizer_pro.stats import RunStats
-from sanitizer_pro.utils import _EXCEL_WARN_MB_DEFAULT, _STDIN, _STDOUT, ConfigurationError, resolve_fmt
+from sanitizer_pro.utils import (
+    _EXCEL_WARN_MB_DEFAULT, _STDIN, _STDOUT, ConfigurationError, InputFormatError, resolve_fmt,
+)
 from sanitizer_pro.worker import WorkerResult, _worker_chunk, _worker_fn, _worker_init
 
 # =============================================================================
@@ -531,6 +533,7 @@ def _plan_io(args: argparse.Namespace, config: SanitizerConfig) -> IOPlan:
     is_hub_input = str(args.input).startswith('hf://')
     multi = is_multi_input(args.input)
     files = [args.input]
+    input_formats: Set[str] = set()
     if is_hub_input:
         from sanitizer_pro.hub import parse_hf_uri
         parse_hf_uri(args.input)  # fail fast on malformed URIs
@@ -541,6 +544,7 @@ def _plan_io(args: argparse.Namespace, config: SanitizerConfig) -> IOPlan:
         except ValueError as exc:
             raise CliError(str(exc)) from None
         formats = {resolve_fmt(f, args.input_format) for f in files}
+        input_formats = set(formats)
         if '' in formats:
             raise CliError("Cannot detect the format of some input files. Supply --input-format.")
         input_fmt = formats.pop() if len(formats) == 1 else ''   # '' = mixed formats
@@ -549,6 +553,7 @@ def _plan_io(args: argparse.Namespace, config: SanitizerConfig) -> IOPlan:
         input_fmt = resolve_fmt(args.input, args.input_format)
         if not input_fmt:
             raise CliError("Cannot detect input format. Supply --input-format.")
+        input_formats = {input_fmt}
     excel_sheet: Any = 0
     if not multi and input_fmt in {'.xlsx', '.xls'}:
         excel_sheet = resolve_excel_sheet(args.excel_sheet_name, args.excel_sheet_index,
@@ -567,8 +572,48 @@ def _plan_io(args: argparse.Namespace, config: SanitizerConfig) -> IOPlan:
         if not (no_output or args.output == '/dev/null'):
             raise CliError("Cannot detect output format. Supply --output-format.")
         output_fmt = input_fmt if input_fmt not in ('', 'hf') else '.jsonl'
+    _require_format_support(input_formats, None if no_output else output_fmt)
     return IOPlan(input_fmt, output_fmt, is_hub_input, excel_sheet, split_spec, no_output,
                   files, multi)
+
+
+def _require_format_support(input_formats: Iterable[str], output_fmt: Optional[str]) -> None:
+    """Fail before any work when a format is unknown or its optional
+    dependency is missing (instead of a traceback mid-run)."""
+    from importlib.util import find_spec
+
+    from sanitizer_pro.io.readers import SUPPORTED_INPUT_FORMATS
+    from sanitizer_pro.io.writers import SUPPORTED_OUTPUT_FORMATS
+
+    def have(*modules: str) -> bool:
+        return all(find_spec(m) is not None for m in modules)
+
+    for fmt in sorted(input_formats):
+        if fmt not in SUPPORTED_INPUT_FORMATS:
+            raise CliError(f"Unsupported input format '{fmt}'. Supported: "
+                           f"{', '.join(sorted(SUPPORTED_INPUT_FORMATS))} (also .gz-compressed "
+                           "text formats). Use --input-format to override.")
+        if fmt == '.parquet' and not have('pyarrow'):
+            raise CliError("Parquet input requires pyarrow: pip install pyarrow")
+        if fmt in {'.xlsx', '.xls'} and not have('pandas', 'openpyxl'):
+            raise CliError("Excel input requires pandas and openpyxl: pip install pandas openpyxl")
+    if output_fmt is None:
+        return
+    if output_fmt not in SUPPORTED_OUTPUT_FORMATS:
+        raise CliError(f"Unsupported output format '{output_fmt}'. Supported: "
+                       f"{', '.join(sorted(SUPPORTED_OUTPUT_FORMATS))}. "
+                       "Use --output-format to override.")
+    if output_fmt == '.parquet' and not have('pyarrow'):
+        raise CliError("Parquet output requires pyarrow: pip install pyarrow")
+    if output_fmt in {'.xlsx', '.xls'} and not (have('xlsxwriter') or have('pandas', 'openpyxl')):
+        raise CliError("Excel output requires xlsxwriter (or pandas and openpyxl): "
+                       "pip install xlsxwriter")
+
+
+def _write_text(path: str, text: str) -> None:
+    """Write a run artifact, creating its directory like the main output's."""
+    Path(path).parent.mkdir(parents=True, exist_ok=True)
+    Path(path).write_text(text, encoding='utf-8')
 
 
 def _prepare_resume(args: argparse.Namespace, config: SanitizerConfig, plan: IOPlan) -> ResumeState:
@@ -854,16 +899,18 @@ def _mode_tag(args: argparse.Namespace) -> str:
 
 
 def _write_artifacts(args: argparse.Namespace, config: SanitizerConfig, plan: IOPlan,
-                     sanitizer: Sanitizer, duration: float) -> None:
+                     sanitizer: Sanitizer, duration: float) -> List[str]:
+    """Write --stats-file and --report; returns the ones that failed."""
+    failed: List[str] = []
     if args.stats_file:
         try:
-            Path(args.stats_file).write_text(
-                json.dumps({'version': __version__, **sanitizer.stats.to_dict()}, indent=2),
-                encoding='utf-8')
+            _write_text(args.stats_file, json.dumps(
+                {'version': __version__, **sanitizer.stats.to_dict()}, indent=2))
         except Exception as exc:
-            logging.warning(f"Could not write stats file: {exc}")
+            logging.error(f"Could not write stats file {args.stats_file}: {exc}")
+            failed.append(args.stats_file)
     if not args.report:
-        return
+        return failed
     c = config
     features = [name for enabled, name in [
         (c.remove_pii, 'PII redaction' + (' + NER' if c.pii_ner else '')),
@@ -890,16 +937,20 @@ def _write_artifacts(args: argparse.Namespace, config: SanitizerConfig, plan: IO
         'version': __version__,
     }
     try:
-        sanitizer.write_report(args.report, meta)
+        _write_text(args.report, sanitizer.report_html(meta))
         logging.info(f"Audit report written to {args.report}")
     except Exception as exc:
-        logging.warning(f"Could not write audit report: {exc}")
+        logging.error(f"Could not write audit report {args.report}: {exc}")
+        failed.append(args.report)
+    return failed
 
 
 def _write_provenance(args: argparse.Namespace, config: SanitizerConfig, plan: IOPlan,
-                      sanitizer: Sanitizer, started_wall: float, outputs: List[str]) -> None:
-    if not (args.manifest or args.dataset_card):
-        return
+                      sanitizer: Sanitizer, started_wall: float, outputs: List[str]) -> List[str]:
+    """Write --manifest and --dataset-card; returns the ones that failed."""
+    wanted = [p for p in (args.manifest, args.dataset_card) if p]
+    if not wanted:
+        return []
     from sanitizer_pro.manifest import build_manifest, write_manifest
     try:
         manifest = build_manifest(
@@ -907,15 +958,27 @@ def _write_provenance(args: argparse.Namespace, config: SanitizerConfig, plan: I
             started_at=started_wall, finished_at=time.time(),
             transformer=sanitizer.transformer, jobs=args.jobs,
             digest=not args.manifest_no_digest)
-        if args.manifest:
+    except Exception as exc:
+        logging.error(f"Could not build the run manifest: {exc}")
+        return wanted
+    failed: List[str] = []
+    if args.manifest:
+        try:
+            Path(args.manifest).parent.mkdir(parents=True, exist_ok=True)
             write_manifest(args.manifest, manifest)
             logging.info(f"Run manifest written to {args.manifest}")
-        if args.dataset_card:
+        except Exception as exc:
+            logging.error(f"Could not write run manifest {args.manifest}: {exc}")
+            failed.append(args.manifest)
+    if args.dataset_card:
+        try:
             from sanitizer_pro.card import render_dataset_card
-            Path(args.dataset_card).write_text(render_dataset_card(manifest), encoding='utf-8')
+            _write_text(args.dataset_card, render_dataset_card(manifest))
             logging.info(f"Dataset card written to {args.dataset_card}")
-    except Exception as exc:
-        logging.warning(f"Could not write provenance artifacts: {exc}")
+        except Exception as exc:
+            logging.error(f"Could not write dataset card {args.dataset_card}: {exc}")
+            failed.append(args.dataset_card)
+    return failed
 
 
 def main() -> None:
@@ -980,6 +1043,7 @@ def main() -> None:
         records = _skip(records, resume.skip)
 
     writer_ctx: Any = None
+    map_failed = False
     try:
         writer_ctx = _open_writer(args, plan, appending=resume.stats is not None)
         with writer_ctx as writer:
@@ -1000,6 +1064,16 @@ def main() -> None:
             else:
                 logging.info("No checkpoint was reached yet; a rerun starts from the beginning.")
         sys.exit(130)
+    except (ImportError, ConfigurationError, InputFormatError, UnicodeDecodeError,
+            OSError) as exc:
+        # Missing optional dependency, invalid input or settings, wrong
+        # --encoding, or an I/O failure (disk full, permissions): a clean
+        # message, with the traceback only at --log-level DEBUG.
+        hint = (f" (the input is not valid {args.encoding}; set --encoding, e.g. latin-1)"
+                if isinstance(exc, UnicodeDecodeError) else "")
+        logging.error(f"{type(exc).__name__}: {exc}{hint}")
+        logging.debug("Details:", exc_info=True)
+        sys.exit(1)
     except Exception as exc:
         logging.critical(f"Fatal error: {exc}", exc_info=True)
         sys.exit(1)
@@ -1007,14 +1081,21 @@ def main() -> None:
         sanitizer.close()
         if sanitizer.pseudo_registry is not None and args.pseudo_map_file:
             try:
+                Path(args.pseudo_map_file).parent.mkdir(parents=True, exist_ok=True)
                 sanitizer.export_pseudonym_map(args.pseudo_map_file)
             except Exception as exc:
-                logging.warning(f"Could not write pseudonym map: {exc}")
+                logging.error(f"Could not write pseudonym map {args.pseudo_map_file}: {exc}")
+                map_failed = True
 
     _print_summary(args, sanitizer.stats)
-    _write_artifacts(args, config, plan, sanitizer, time.monotonic() - started)
-    _write_provenance(args, config, plan, sanitizer, started_wall,
-                      list(getattr(writer_ctx, 'paths', []) or []))
+    failed = _write_artifacts(args, config, plan, sanitizer, time.monotonic() - started)
+    failed += _write_provenance(args, config, plan, sanitizer, started_wall,
+                                list(getattr(writer_ctx, 'paths', []) or []))
+    if map_failed:
+        failed.append(args.pseudo_map_file)
+    if failed:
+        logging.error(f"Requested output not written: {', '.join(failed)}")
+        sys.exit(1)
 
 
 if __name__ == "__main__":
