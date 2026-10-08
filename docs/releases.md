@@ -9,6 +9,8 @@ Releases are built and published by `.github/workflows/release.yml`. It runs whe
 5. publishes to PyPI with Trusted Publishing, which also uploads PEP 740 attestations;
 6. creates a GitHub release with the changelog section for the version, the distributions, their `.sigstore.json` bundles and the SBOM.
 
+Steps 5 and 6 run independently after the build. If the PyPI upload fails (for example `invalid-publisher`: no trusted publisher is registered), the GitHub release is still created. Fix the PyPI side, then use "Re-run failed jobs" on the same run.
+
 ## Verifying a release
 
 ```bash
