@@ -1,5 +1,24 @@
 # Changelog
 
+## 4.0.1 (2026-10-08)
+
+### Fixed
+
+- **Missing optional dependencies are reported before any work, in one line.** Parquet
+  or Excel input/output without pyarrow, pandas/openpyxl or xlsxwriter used to fail
+  with a Python traceback. Parquet output also failed only after the input had been
+  read.
+- **Unsupported input and output formats fail with the list of supported ones**
+  instead of a traceback.
+- **Undecodable input names the fix.** The error now suggests `--encoding`.
+- **Other expected failures** (bad settings, I/O errors such as a full disk) print
+  one line and exit 1. The traceback is shown only with `--log-level DEBUG`.
+- **`--report`, `--stats-file`, `--manifest`, `--dataset-card` and
+  `--pseudo-map-file` create missing parent directories**, like the main output.
+- **A requested artifact that cannot be written now fails the run (exit status
+  1).** Before, the run only logged a warning and exited 0, so CI pipelines could
+  miss it.
+
 ## 4.0.0 (2026-10-07)
 
 The five phases of the audit plan (`docs/AUDIT_2026-10.md`):

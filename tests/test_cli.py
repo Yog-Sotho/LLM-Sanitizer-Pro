@@ -367,3 +367,70 @@ def test_hf_input_end_to_end(tmp_path):
     assert len(lines) > 1000  # gsm8k test has 1319 rows
     rec = json.loads(lines[0])
     assert 'question' in rec and 'answer' in rec
+
+
+class TestCleanErrors:
+    """User-facing failures end with one clear line and exit status 1, never a
+    traceback; requested artifacts are written or the run fails."""
+
+    def _fails_cleanly(self, r, needle):
+        assert r.returncode == 1, r.stderr
+        assert "Traceback" not in r.stderr
+        assert needle in r.stderr
+
+    def test_unsupported_input_format(self, tmp_path):
+        inp = tmp_path / "data.weird"
+        inp.write_text("x\n")
+        r = run_cli('--input', str(inp), '--output', str(tmp_path / "o.jsonl"), '--no-progress')
+        self._fails_cleanly(r, "Unsupported input format '.weird'")
+
+    def test_unsupported_output_format(self, tmp_path):
+        inp = tmp_path / "in.jsonl"
+        write_jsonl(inp, SAMPLE)
+        r = run_cli('--input', str(inp), '--output', str(tmp_path / "o.weird"), '--no-progress')
+        self._fails_cleanly(r, "Unsupported output format '.weird'")
+
+    def test_invalid_encoding_suggests_flag(self, tmp_path):
+        inp = tmp_path / "in.jsonl"
+        inp.write_bytes(b'{"text": "caf\xe9 au lait is a fine drink for a morning"}\n')
+        r = run_cli('--input', str(inp), '--output', str(tmp_path / "o.jsonl"), '--no-progress')
+        self._fails_cleanly(r, "set --encoding")
+
+    def test_artifacts_create_their_directories(self, tmp_path):
+        inp = tmp_path / "in.jsonl"
+        write_jsonl(inp, SAMPLE)
+        paths = {flag: tmp_path / "new" / name for flag, name in [
+            ('--report', 'a/r.html'), ('--stats-file', 'b/s.json'), ('--manifest', 'c/m.json'),
+            ('--dataset-card', 'd/README.md'), ('--pseudo-map-file', 'e/map.json')]}
+        args = [x for flag, p in paths.items() for x in (flag, str(p))]
+        r = run_cli('--input', str(inp), '--output', str(tmp_path / "o.jsonl"), '--remove-pii',
+                    '--pii-pseudonymize', '--quiet', '--no-progress', *args)
+        assert r.returncode == 0, r.stderr
+        assert all(p.exists() for p in paths.values())
+
+    def test_unwritable_artifact_fails_the_run(self, tmp_path):
+        inp = tmp_path / "in.jsonl"
+        write_jsonl(inp, SAMPLE)
+        (tmp_path / "blocker").write_text("a file, not a directory")
+        r = run_cli('--input', str(inp), '--output', str(tmp_path / "o.jsonl"),
+                    '--stats-file', str(tmp_path / "blocker" / "s.json"), '--quiet', '--no-progress')
+        self._fails_cleanly(r, "Requested output not written")
+        assert (tmp_path / "o.jsonl").exists()          # the dataset itself was still written
+
+
+def test_missing_optional_dependencies_are_reported_before_any_work(monkeypatch):
+    from importlib import util
+
+    from sanitizer_pro import cli
+    real = util.find_spec
+    monkeypatch.setattr(util, "find_spec",
+                        lambda name, *a: None if name in {"pyarrow", "pandas", "xlsxwriter"}
+                        else real(name, *a))
+    cases = [({'.parquet'}, None, "Parquet input requires pyarrow"),
+             ({'.xlsx'}, None, "Excel input requires pandas"),
+             ({'.jsonl'}, '.parquet', "Parquet output requires pyarrow"),
+             ({'.jsonl'}, '.xlsx', "Excel output requires xlsxwriter")]
+    for inputs, output, message in cases:
+        with pytest.raises(cli.CliError, match=message):
+            cli._require_format_support(inputs, output)
+    cli._require_format_support({'.jsonl', '.csv'}, '.jsonl')     # core formats need nothing
