@@ -31,8 +31,7 @@ def render() -> str:
         actions = [a for a in group._group_actions if a.help != argparse.SUPPRESS]
         if not actions:
             continue
-        title = {"options": "General", "optional arguments": "General",  # 3.9 name
-                 "positional arguments": "Arguments"}.get(
+        title = {"options": "General", "positional arguments": "Arguments"}.get(
             group.title or "", group.title or "")
         lines += [f"## {title}", "", "| Option | Default | Description |", "|---|---|---|"]
         for a in actions:

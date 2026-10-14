@@ -1,5 +1,6 @@
 site_name: LLM Sanitizer Pro
 site_description: Dataset sanitization and curation for LLM training
+site_url: https://yog-sotho.github.io/LLM-Sanitizer-Pro/
 repo_url: https://github.com/Yog-Sotho/LLM-Sanitizer-Pro
 edit_uri: edit/main/docs/
 theme:

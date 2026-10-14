@@ -1,5 +1,18 @@
 # Changelog
 
+## 4.1.0 (2026-10-14)
+
+### Changed
+
+- **Python 3.10 or newer is required.** Python 3.9 has been end-of-life since
+  October 2025, and the releases that fix the known advisories in the
+  dependencies below no longer support it.
+- **Every minimum dependency version is now the first release without known
+  advisories**: tqdm 4.66.3, pyarrow 23.0.1 (`all`), transformers 5.10.0 (`all`,
+  `quality`), torch 2.13.0 (`quality`), mkdocs-material 9.7.7 (`docs`), pytest
+  9.0.3 (`dev`), and setuptools 83 to build. Transformers 4 is no longer
+  supported.
+
 ## 4.0.1 (2026-10-08)
 
 ### Fixed
