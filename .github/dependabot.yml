@@ -1,0 +1,30 @@
+# Weekly update pull requests, grouped so each ecosystem opens at most a couple.
+# Security updates (Dependabot alerts) are separate and open as soon as an advisory lands.
+version: 2
+updates:
+  # pyproject.toml: the core dependency and every extra.
+  # increase-if-necessary: a range only changes when a new release falls outside it
+  # (e.g. a new major past a `<3` cap), so CI tests it. Minimums stay at the first
+  # release without known advisories instead of rising every week.
+  - package-ecosystem: pip
+    directory: /
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    versioning-strategy: increase-if-necessary
+    groups:
+      python-minor-patch:
+        update-types: [minor, patch]
+    ignore:
+      # MkDocs 2 drops the plugin and theme system Material for MkDocs needs.
+      - dependency-name: mkdocs
+        versions: [">=2"]
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ["*"]
