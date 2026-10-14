@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=77.0"]
+requires = ["setuptools>=83"]  # 77+: SPDX license; 83+: no known advisories
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -7,7 +7,7 @@ name = "llm-sanitizer-pro"
 dynamic = ["version"]
 description = "Production-grade, modular dataset sanitization and curation for LLM training."
 readme = "README.md"
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 license = "MIT"
 license-files = ["LICENSE"]
 authors = [{name = "Sanitize Pro Contributors"}]
@@ -16,7 +16,6 @@ classifiers = [
     "Development Status :: 5 - Production/Stable",
     "Intended Audience :: Developers",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
@@ -24,7 +23,7 @@ classifiers = [
     "Typing :: Typed",
 ]
 dependencies = [
-    "tqdm>=4.60.0",
+    "tqdm>=4.66.3",
 ]
 
 [project.urls]
@@ -40,10 +39,10 @@ all = [
     "ijson>=3.2.0",
     "langdetect>=1.0.9",
     "pyyaml>=6.0",
-    "pyarrow>=14.0.0",
+    "pyarrow>=23.0.1",
     "datasketch>=1.6.0",
     "rensa>=0.5",
-    "transformers>=4.30.0",
+    "transformers>=5.10.0",
 ]
 fuzzy = [
     "rensa>=0.5",
@@ -63,18 +62,18 @@ lang = [
     "fasttext-numpy2-wheel>=0.9.2",
 ]
 quality = [
-    "transformers>=4.30.0",
-    "torch>=2.0",
+    "transformers>=5.10.0",
+    "torch>=2.13.0",
     "fasttext-numpy2-wheel>=0.9.2",
 ]
 docs = [
     "mkdocs>=1.6,<2",          # MkDocs 2.0 drops the plugin/theme system Material needs
-    "mkdocs-material>=9.5",
+    "mkdocs-material>=9.7.7",
 ]
 dev = [
     "ruff>=0.1.0,<0.17",
-    "mypy>=2.3,<3; python_version >= '3.10'",  # type-checked in CI on 3.12
-    "pytest>=7.4.0",
+    "mypy>=2.3,<3",  # type-checked in CI on 3.12
+    "pytest>=9.0.3",
 ]
 
 [project.scripts]
@@ -91,7 +90,7 @@ sanitizer_pro = ["py.typed", "data/*.jsonl"]
 
 [tool.ruff]
 line-length = 100
-target-version = "py39"
+target-version = "py310"
 
 [tool.ruff.lint]
 # Explicit rule set so newer ruff releases (whose defaults grow) can't break CI.
@@ -103,8 +102,7 @@ ignore = ["E701", "E702"]
 testpaths = ["tests"]
 
 [tool.mypy]
-# Newest mypy cannot target 3.9; 3.9 syntax compatibility is enforced by ruff
-# (target-version py39) and the 3.9 CI test job.
+# The oldest supported Python; the CI test matrix covers 3.10-3.12.
 python_version = "3.10"
 strict = true
 warn_return_any = true
