@@ -33,8 +33,8 @@ jobs:
       id-token: write       # Sigstore signing and build provenance
       attestations: write   # GitHub artifact attestations
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: '3.12'
       - name: Build sdist and wheel
@@ -56,21 +56,21 @@ jobs:
       - name: Release notes from CHANGELOG.md
         run: python scripts/release_notes.py "$TAG" > release-notes.md
       - name: Build provenance (SLSA, GitHub attestations)
-        uses: actions/attest-build-provenance@v2
+        uses: actions/attest-build-provenance@v4
         with:
           subject-path: 'dist/*'
       - name: Sign with Sigstore
-        uses: sigstore/gh-action-sigstore-python@v3.0.0
+        uses: sigstore/gh-action-sigstore-python@v3.5.0
         with:
           inputs: ./dist/*.tar.gz ./dist/*.whl
           upload-signing-artifacts: false
           release-signing-artifacts: false
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: dist
           path: dist/*.tar.gz
           if-no-files-found: error
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: dist-wheel
           path: dist/*.whl
@@ -79,7 +79,7 @@ jobs:
         run: |
           mkdir release-assets
           cp dist/*.sigstore.json sbom.cdx.json release-notes.md release-assets/
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: release-assets
           path: release-assets/
@@ -92,7 +92,7 @@ jobs:
     permissions:
       id-token: write       # Trusted Publishing; also uploads PEP 740 attestations
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           pattern: dist*
           path: dist/
@@ -109,7 +109,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           path: assets/
           merge-multiple: true
