@@ -1,6 +1,6 @@
 # Changelog
 
-## 4.1.0 (2026-10-14)
+## 4.1.0 (2026-10-18)
 
 ### Changed
 
@@ -12,6 +12,15 @@
   `quality`), torch 2.13.0 (`quality`), mkdocs-material 9.7.7 (`docs`), pytest
   9.0.3 (`dev`), and setuptools 83 to build. Transformers 4 is no longer
   supported.
+- **Dependabot version updates** for Python dependencies and GitHub Actions.
+
+### Fixed
+
+- **Documentation and `--jobs` help:** pseudonyms match a single-process run
+  only when a pseudonym key is set; `--split`/`--shard-size` cannot be resumed;
+  `[all]` does not include the NER, GLiNER, semantic, GlotLID or model-scorer
+  extras; single-process speed is 6.1k rec/s; the semantic-index harness uses
+  synthetic vectors; the release steps are listed in the order they run.
 
 ## 4.0.1 (2026-10-08)
 
