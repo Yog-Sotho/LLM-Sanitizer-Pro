@@ -22,7 +22,7 @@ Measured with `benchmarks/bench.py` on 100k synthetic instruction records (~525 
 | Regex PII | `python -m sanitizer_pro.evaluation` | P = R = 1.0 on the bundled 600-record set |
 | Regex + GLiNER2 | `… --backend regex+gliner` | micro F1 0.92 (exact spans), 0.96 (overlap) |
 | Fuzzy dedup | `python -m benchmarks.fuzzy_recall` | 97–98% recall at or above the threshold (t = 0.7–0.85); no pair 0.15 or more below it is flagged |
-| Semantic index | `python -m benchmarks.semantic_recall` | usearch matched exact search on 99.9% of decisions on 20k real embeddings |
+| Semantic index | `python -m benchmarks.semantic_recall` | usearch matched exact search on every decision for 20k synthetic 256-d vectors (99.9% on model2vec embeddings of 20k real records, measured separately) |
 | Rule filters | parity with datatrove 0.10.1 | 98–100% identical keep/drop decisions on 3,000 docs |
 
 ## Running the benchmarks

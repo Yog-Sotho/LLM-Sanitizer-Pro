@@ -44,12 +44,12 @@ Production-grade, modular dataset sanitization, PII redaction, and curation pipe
   - **Downloads:** benchmarks come from the Hugging Face Hub and are cached. GPQA and HLE are gated: accept their terms on the Hub and set `HF_TOKEN`. You can also add your own reference files with `--decontam-refs`.
   - **Reporting:** removed records are counted per benchmark in the stats, the summary and the report. When benchmarks overlap (MATH-500 is a subset of MATH), the first one listed gets the credit.
   - **Size:** indexing all 20 ungated benchmarks gives 4.1M n-grams, about 300 MB of RAM.
-- **Dataset Splitting & Sharding**: `--split train=0.9,val=0.05,test=0.05` or fixed-size shards with `--shard-size`. Splits and `--sample` are decided by a hash of each record's content (salted by `--seed`), so a record always lands in the same split — across runs, resumes, and filter changes — and exact duplicates never straddle train and test.
+- **Dataset Splitting & Sharding**: `--split train=0.9,val=0.05,test=0.05` or fixed-size shards with `--shard-size`. Splits and `--sample` are decided by a hash of each record's content (salted by `--seed`), so a record always lands in the same split — across runs and filter changes — and exact duplicates never straddle train and test. (`--split` and `--shard-size` can't be combined with `--resume`.)
 - **Crash-Safe I/O**: Atomic JSON writes (`.tmp` + `os.replace()`), safe HTML stripping via `html.parser`, structure-preserving text normalization (newlines kept for code/markdown data).
 - **Resumable Runs** (`--resume`): progress is checkpointed to `<output>.checkpoint.json` every `--checkpoint-interval` records; after a crash or Ctrl-C, rerun the same command and the pipeline skips already-processed input, restores statistics, pseudonym and sampling state, and appends to the output. Rows written after the last checkpoint by a hard crash (OOM-kill, SIGKILL) are truncated away and re-processed, so the result matches an uninterrupted run. Pair with `--dedup-backend sqlite --dedup-db-path` for dedup state that also survives the restart (rolled back to the checkpoint on resume).
-- **Parallel Processing** (`--jobs N`): output, statistics, pseudonyms and report samples are identical to a single-process run.
+- **Parallel Processing** (`--jobs N`): output, statistics and report samples are identical to a single-process run; pseudonyms too when a pseudonym key is set (see below).
   - **JSONL input:** workers read and parse byte-range chunks of the files themselves.
-  - **Measured speed:** 100k records with PII + secrets redaction and dedup ran at 20.6k rec/s with 4 jobs, against 6.3k rec/s for one process.
+  - **Measured speed:** 100k records with PII + secrets redaction and dedup ran at 20.6k rec/s with 4 jobs, against 6.1k rec/s for one process.
   - **Pseudonyms:** with `--pii-pseudonymize`, set `SANITIZE_PSEUDO_KEY` (or `--pseudo-key`) for keyed pseudonyms. The same value gets the same pseudonym in every worker and every run that uses the key.
 - **Many Input Files**: `--input` takes a directory (searched recursively) or a glob (`'data/**/*.jsonl'`). Files are read in sorted order, may mix formats, and work with `--resume`.
 - **Provenance**: `--manifest run.json` records exactly how a dataset was produced: versions, models, full config and its hash, SHA-256 of every input and output, and per-stage counts. `--dataset-card README.md` writes a Hugging Face dataset card from it, and `sanitize diff a.json b.json` compares two runs (`--fail-on-change` for CI).
@@ -59,7 +59,8 @@ Production-grade, modular dataset sanitization, PII redaction, and curation pipe
 
 ```bash
 pip install llm-sanitizer-pro          # core (stdlib + tqdm)
-pip install "llm-sanitizer-pro[all]"   # all format & feature extras
+pip install "llm-sanitizer-pro[all]"   # formats, fuzzy dedup, langdetect, transformers; NER, GLiNER,
+                                       # semantic, GlotLID and model scorers have their own extras
 ```
 
 ## 🔨 Usage
