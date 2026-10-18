@@ -2,9 +2,9 @@
 
 Releases are built and published by `.github/workflows/release.yml`. It runs when a `v*` tag is pushed, or by hand from `main` (Actions → Release → Run workflow, with the version). The manual run creates the tag on the commit it built. The workflow:
 
-1. checks that the tag matches `sanitizer_pro.__version__`;
-2. builds the sdist and wheel and runs `twine check`;
-3. writes a CycloneDX SBOM (`sbom.cdx.json`) of the wheel installed with all extras;
+1. builds the sdist and wheel and runs `twine check`;
+2. checks that the tag matches the built version (`sanitizer_pro.__version__`);
+3. writes a CycloneDX SBOM (`sbom.cdx.json`) of the wheel installed with the `[all]` extra;
 4. signs every distribution with Sigstore (keyless, via GitHub's OIDC identity) and records SLSA build provenance with GitHub artifact attestations;
 5. publishes to PyPI with Trusted Publishing, which also uploads PEP 740 attestations;
 6. creates a GitHub release with the changelog section for the version, the distributions, their `.sigstore.json` bundles and the SBOM.

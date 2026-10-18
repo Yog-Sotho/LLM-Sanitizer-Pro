@@ -364,7 +364,8 @@ def build_parser() -> argparse.ArgumentParser:
     rt.add_argument('--no-progress', action='store_true',
                    help='Hide the progress bar.')
     rt.add_argument('--jobs', type=int, default=1,
-                   help='Worker processes for the per-record stage (output identical to --jobs 1).')
+                   help='Worker processes for the per-record stage (output identical to --jobs 1; '
+                        'pseudonyms too only with --pseudo-key or SANITIZE_PSEUDO_KEY).')
     rt.add_argument('--chunk-size', type=int, default=64, metavar='N',
                    help='Records per task sent to a worker (record dispatch; JSONL input is read in 4 MB chunks).')
     rt.add_argument('--dry-run', action='store_true',

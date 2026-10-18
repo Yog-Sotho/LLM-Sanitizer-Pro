@@ -140,7 +140,7 @@ sanitize diff A B [--json] [--fail-on-change]
 | `--log-format` `{text,json}` | `text` | Log line format on stderr: human text or JSON lines (for structured ingestion). Default: text. |
 | `--quiet` |  | Only warnings and errors. |
 | `--no-progress` |  | Hide the progress bar. |
-| `--jobs` | `1` | Worker processes for the per-record stage (output identical to --jobs 1). |
+| `--jobs` | `1` | Worker processes for the per-record stage (output identical to --jobs 1; pseudonyms too only with --pseudo-key or SANITIZE_PSEUDO_KEY). |
 | `--chunk-size` `N` | `64` | Records per task sent to a worker (record dispatch; JSONL input is read in 4 MB chunks). |
 | `--dry-run` |  | Process the first --dry-run-size records and write nothing. |
 | `--dry-run-size` | `10000` | Records processed by --dry-run. |
