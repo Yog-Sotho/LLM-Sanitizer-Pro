@@ -1,0 +1,74 @@
+# Features in detail
+
+Everything the sanitizer can do, with the flag that turns it on. New here? Start with the
+[README](index.md); for every option and its default, see the [CLI reference](cli.md).
+
+- **Multi-Format Streaming**: JSONL, JSON (ijson streaming), CSV/TSV, TXT, Parquet, Excel, and gzip variants — from files or stdin/stdout.
+- **Hugging Face Hub Input** (`--input hf://owner/dataset[/config[/split]]`): sanitize a Hub dataset directly — shards are fetched via the Hub's parquet API (only `pyarrow` needed, no `datasets` library), cached locally, and streamed through the pipeline. Set `HF_TOKEN` for private/gated datasets.
+- **Advanced PII Redaction**: Email, URL, phone (NANP + international), payment card (Luhn-checked), IBAN (mod-97-checked), SSN (validity-checked), and IPv4/IPv6 detection — validators reject order IDs, timestamps, version strings and loopback addresses — with three modes: token replacement, partial masking (`--pii-mask`), and stable pseudonymization (`--pii-pseudonymize` + exportable mapping).
+- **NER-Backed PII Detection** (`--pii-ner`): names, places and organizations that regexes cannot catch, using spaCy, transformers or **GLiNER2-PII** (`--pii-ner-backend gliner`; Apache-2.0, 42 PII types, 7 languages; `pip install "llm-sanitizer-pro[gliner]"`). GLiNER also finds structured PII by context: `address`, `date_of_birth`, `id_number` (passport, licence, tax, national ID), `financial`, `username` and `credential`. Select them with `--pii-ner-entities` or `all`; `--pii-ner-threshold` sets the confidence cut. All three redaction modes apply: "Sarah Connor" becomes `[PII_PERSON]`, `S*** C***`, or a stable `Person_0001`.
+- **Measured PII Accuracy** (`python -m sanitizer_pro.evaluation --backend regex+gliner`): span-level precision, recall and F1 per kind on a labeled set (bundled, or yours as JSONL). The bundled set is synthetic: 600 records, 919 spans, 200 hard negatives such as order IDs, timestamps, versions, UUIDs and loopback IPs. On it, the regex layer scores precision and recall of 1.00 with zero false positives. Adding GLiNER2-PII gives person F1 0.94 and micro F1 0.96 (overlap matching). These are in-distribution numbers for a set this project generated, so evaluate on your own data before relying on them. CI fails if the regex layer's accuracy on this set regresses.
+- **Secrets Detection** (`--redact-secrets`): finds and redacts credentials — AWS (access and secret keys), Google, Stripe, Slack, GitHub, GitLab, Hugging Face, npm, PyPI, Azure storage, OpenAI and Anthropic keys, private keys in any PEM/PGP armor (truncated ones too), JWTs, bearer tokens, DB connection strings, and entropy-checked `api_key = "…"` assignments (the variable name is kept) — with high-precision provider-shaped patterns. Works with or without `--remove-pii`, and honors masking/pseudonymization.
+- **Profiles** (`--profile fine-tune|pretrain|rag`): one flag applies a curated bundle of defaults for a common job; your explicit flags and `--config` always win over the preset. `--profile list` shows what each sets.
+- **High-Performance Deduplication** (three tiers):
+  - Exact SHA-256 dedup (in-memory or disk-backed SQLite for huge datasets).
+  - Fuzzy near-dedup (`--fuzzy-dedup`, `--fuzzy-threshold`): MinHash over word 3-shingles.
+    - **Signatures:** computed by [rensa](https://pypi.org/project/rensa/) (Rust, `pip install "llm-sanitizer-pro[fuzzy]"`) or datasketch.
+    - **Matching:** LSH finds candidates and each one is verified against its stored signature.
+    - **Measured accuracy:** at thresholds 0.7–0.85, 97–98% of pairs at or above the threshold are caught, and no pair 0.15 or more below it.
+    - **Disk-backed index:** with `--dedup-backend sqlite` the index lives on disk. Memory stayed flat at about 140 MB from 100k to 500k records, while the in-memory index reached 1.1 GB at 500k.
+    - **Resume:** with `--dedup-db-path` the index survives `--resume`.
+  - Semantic near-dedup (`--semantic-dedup`): static embeddings (model2vec, ~30MB, no torch) catch paraphrases that share no n-grams (`--semantic-threshold`).
+    - **Index:** a usearch HNSW index (`--semantic-index`, part of the `[semantic]` extra) keeps lookups fast as the index grows.
+    - **Measured accuracy:** on 20k real embeddings it matched exact search on 99.9% of decisions, at ~3k rec/s.
+    - **Fallback:** without usearch, an LSH index is used. It slows down on large inputs.
+- **LLM-Native Formatting**: Direct export to ChatML (`--format-chatml`) and Alpaca/Instruct (`--format-instruct`) schemas, with automatic key mapping (`prompt`/`question`/`response`/`completion`/…). ShareGPT `conversations` (`{"from": "human", "value": …}`) are converted to OpenAI `messages`.
+- **Chat Dataset Validation** (`--validate-chat`): lint conversations before they reach a trainer — role alternation, empty turns, missing assistant replies, multiple/misplaced system messages, unknown roles, and per-conversation token budgets (`--chat-max-tokens`), with a per-reason rejection breakdown in the report and stats file. Understands OpenAI tool calling (function name and JSON `arguments` checked; tool results must answer an open `tool_call_id`, and every call must be answered), multimodal content parts (`[{"type": "text"}, {"type": "image_url"}]`), and ShareGPT records. With an HF `--tokenizer` that has a chat template, budgets count the rendered conversation (role markup and special tokens included) — what the trainer actually sees.
+- **Quality & Content Filtering**: Length/word/uniqueness/ASCII gates, all-caps rejection, code detection, profanity filtering, and pluggable Python quality scripts.
+- **Language Filtering** (`--lang-filter en,zh`): GlotLID v3 (fastText, 2,000+ language varieties, the identifier used by FineWeb-2) by default when installed (`pip install "llm-sanitizer-pro[lang]"`; the 1.7 GB model downloads once), OpenLID-v2 (`--lang-backend openlid`, GPL-3.0, downloaded on demand), or langdetect. Filters accept ISO 639-1 or 639-3 codes — `zh` matches `cmn_Hani`/`yue_Hani`, `ar` matches Arabic dialects — with `--lang-confidence` gating. Each `--jobs` worker loads its own model copy (~1.7 GB RAM for GlotLID).
+- **Quality Scoring** (`--quality-min-score`, `--keep-top-percent`, `--quality-score-field`): every record gets a [0, 1] quality score from one of five backends:
+  - `heuristic` (default): no dependencies; C4/Gopher-style prose signals with a repetition penalty.
+  - `fineweb-edu`: the FineWeb-Edu classifier, the model behind FineWeb-Edu. Its 0–5 score is mapped to 0–1, so the authors' recommended cut of 3 is about `0.5`.
+  - `dclm`: the DCLM-Baseline fastText filter; the score is P(high quality).
+  - `fasttext`: any fastText classifier you supply, via `--quality-model PATH` and `--quality-label`.
+  - `perplexity`: causal-LM perplexity.
+
+  Filter by an absolute bar, keep only the best P%, or just annotate records. With `--jobs N`, every worker runs the scorer. Model scorers: `pip install "llm-sanitizer-pro[quality]"`.
+- **Pretraining Rule Filters** (`--quality-rules gopher,gopher-repetition,c4,fineweb` or `all`): the document heuristics of Gopher, C4 and FineWeb, with datatrove's thresholds and reason names. They need no dependencies and run on the full document. Accept/reject decisions agree with datatrove on 98–100% of documents, measured on 3,000 C4 documents including deliberately perturbed ones; the small remainder comes from tokenization at the threshold boundaries. Failures are reported per rule in the stats, the summary and the report. The rules are tuned for English, so run them after `--lang-filter`.
+- **Benchmark Decontamination** (`--decontaminate`): removes records whose word 8-grams overlap an eval set. Matching covers question **and** solution/choice text.
+  - **Benchmarks:** MMLU, MMLU-Pro, GPQA, GSM8K, GSM-Plus, MATH, MATH-500, AIME 2024/2025, IFEval, BBH, MuSR, HLE, SimpleQA, HumanEval(+), MBPP(+), ARC, HellaSwag, TruthfulQA and WinoGrande.
+  - **Groups:** `open-llm-v2` is the Open LLM Leaderboard v2 set. `all` means every benchmark that isn't gated.
+  - **Downloads:** benchmarks come from the Hugging Face Hub and are cached. GPQA and HLE are gated: accept their terms on the Hub and set `HF_TOKEN`. You can also add your own reference files with `--decontam-refs`.
+  - **Reporting:** removed records are counted per benchmark in the stats, the summary and the report. When benchmarks overlap (MATH-500 is a subset of MATH), the first one listed gets the credit.
+  - **Size:** indexing all 20 ungated benchmarks gives 4.1M n-grams, about 300 MB of RAM.
+- **Dataset Splitting & Sharding**: `--split train=0.9,val=0.05,test=0.05` or fixed-size shards with `--shard-size`. Splits and `--sample` are decided by a hash of each record's content (salted by `--seed`), so a record always lands in the same split — across runs and filter changes — and exact duplicates never straddle train and test. (`--split` and `--shard-size` can't be combined with `--resume`.)
+- **Crash-Safe I/O**: Atomic JSON writes (`.tmp` + `os.replace()`), safe HTML stripping via `html.parser`, structure-preserving text normalization (newlines kept for code/markdown data).
+- **Resumable Runs** (`--resume`): progress is checkpointed to `<output>.checkpoint.json` every `--checkpoint-interval` records; after a crash or Ctrl-C, rerun the same command and the pipeline skips already-processed input, restores statistics, pseudonym and sampling state, and appends to the output. Rows written after the last checkpoint by a hard crash (OOM-kill, SIGKILL) are truncated away and re-processed, so the result matches an uninterrupted run. Pair with `--dedup-backend sqlite --dedup-db-path` for dedup state that also survives the restart (rolled back to the checkpoint on resume).
+- **Parallel Processing** (`--jobs N`): output, statistics and report samples are identical to a single-process run; pseudonyms too when a pseudonym key is set (see below).
+  - **JSONL input:** workers read and parse byte-range chunks of the files themselves.
+  - **Measured speed:** 100k records with PII + secrets redaction and dedup ran at 20.6k rec/s with 4 jobs, against 6.1k rec/s for one process.
+  - **Pseudonyms:** with `--pii-pseudonymize`, set `SANITIZE_PSEUDO_KEY` (or `--pseudo-key`) for keyed pseudonyms. The same value gets the same pseudonym in every worker and every run that uses the key.
+- **Many Input Files**: `--input` takes a directory (searched recursively) or a glob (`'data/**/*.jsonl'`). Files are read in sorted order, may mix formats, and work with `--resume`.
+- **Provenance**: `--manifest run.json` records exactly how a dataset was produced: versions, models, full config and its hash, SHA-256 of every input and output, and per-stage counts. `--dataset-card README.md` writes a Hugging Face dataset card from it, and `sanitize diff a.json b.json` compares two runs (`--fail-on-change` for CI).
+- **Audit Report** (`--report audit.html`): a self-contained HTML artifact per run — removal funnel, PII redaction counts by type, quality-score distribution, chat-failure breakdown, and before/after redaction samples. Light/dark aware, no external assets; archive it next to the dataset or attach it to a compliance ticket. Also available from the Python API via `s.write_report(path)`.
+
+## Installing NER-backed PII detection
+
+`--pii-ner` auto-selects an installed backend (spaCy preferred, transformers fallback):
+
+```bash
+pip install "llm-sanitizer-pro[ner]"
+pip install "en_core_web_sm @ https://huggingface.co/spacy/en_core_web_sm/resolve/main/en_core_web_sm-any-py3-none-any.whl"
+```
+
+Use `--pii-ner-entities person,location,org` to widen coverage (default: `person`) and
+`--pii-ner-model` to swap in another spaCy model or HF token-classification model.
+
+## How decontamination works
+
+A record is flagged as contaminated when at least `--decontam-min-hits` (default 1) of its
+normalized word 8-grams (`--decontam-ngram`) also appear in the reference index built from
+benchmark test sets — the same n-gram collision approach used to decontaminate GPT-3 and
+Llama training data. Benchmark items shorter than the n-gram size are matched whole.
+Named benchmarks require `pyarrow`; `--decontam-refs` files work with any supported input
+format and no extra dependencies.

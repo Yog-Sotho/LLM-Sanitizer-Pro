@@ -10,6 +10,15 @@
   signed with Sigstore (keyless) and carries build provenance. A `Docker` workflow
   builds and smoke-tests it on both architectures for pull requests that change it.
 
+### Changed
+
+- **README rewritten for non-specialists:** what the tool does and why, a real
+  before/after example, a two-minute quick start, profiles and an "I want to…" cheat
+  sheet. The detailed feature list, the command recipes and the Python API moved to new
+  docs pages ([Features in detail](https://yog-sotho.github.io/LLM-Sanitizer-Pro/features/),
+  [Recipes](https://yog-sotho.github.io/LLM-Sanitizer-Pro/recipes/),
+  [Python API](https://yog-sotho.github.io/LLM-Sanitizer-Pro/python-api/)) unchanged.
+
 ## 4.1.0 (2026-10-18)
 
 ### Changed

@@ -17,7 +17,10 @@ theme:
       toggle: {icon: material/brightness-4, name: Light mode}
 nav:
   - Overview: index.md
+  - Features in detail: features.md
+  - Recipes: recipes.md
   - CLI reference: cli.md
+  - Python API: python-api.md
   - Provenance: provenance.md
   - Performance: performance.md
   - Releases: releases.md

@@ -6,11 +6,12 @@
 # out; build your own image on top of this one to add them.
 #
 #   docker build -t llm-sanitizer-pro .
-#   docker run --rm -v "$PWD:/data" llm-sanitizer-pro \
+#   docker run --rm --user "$(id -u):$(id -g)" -v "$PWD:/data" llm-sanitizer-pro \
 #       --input raw.jsonl --output clean.jsonl --profile fine-tune
 #
 # The container runs as an unprivileged user (uid 10001) in /data; mount the
-# directory with your dataset there. Published images:
+# directory with your dataset there. On Linux, add --user "$(id -u):$(id -g)" so the
+# output files can be written into a directory you own. Published images:
 # ghcr.io/yog-sotho/llm-sanitizer-pro:{version,latest} (linux/amd64, linux/arm64).
 
 ARG PYTHON_IMAGE=python:3.12-slim-bookworm@sha256:7753c33391fc9f01d1984375bf375eb6686d52ba10db6043a86634a5ccf90dcf
