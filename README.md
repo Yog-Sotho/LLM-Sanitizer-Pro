@@ -1,5 +1,12 @@
 <div align="center">
   <img src="https://raw.githubusercontent.com/Yog-Sotho/LLM-Sanitizer-Pro/main/Images/banner.png" alt="LLM Sanitizer PRO: scrub, redact, dedup and curate data for LLM training" width="100%"/>
+  <p>
+    <a href="https://pypi.org/project/llm-sanitizer-pro/"><img src="https://img.shields.io/pypi/v/llm-sanitizer-pro?color=8b5cf6&logo=pypi&logoColor=white" alt="PyPI: llm-sanitizer-pro"></a>
+    <a href="https://pypi.org/project/llm-sanitizer-pro/"><img src="https://img.shields.io/pypi/pyversions/llm-sanitizer-pro?color=3b82f6" alt="Python versions"></a>
+    <a href="https://github.com/Yog-Sotho/LLM-Sanitizer-Pro/actions/workflows/ci.yml"><img src="https://github.com/Yog-Sotho/LLM-Sanitizer-Pro/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+    <a href="https://github.com/Yog-Sotho/LLM-Sanitizer-Pro/blob/main/LICENSE"><img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="License: MIT"></a>
+    <a href="https://yog-sotho.github.io/LLM-Sanitizer-Pro/"><img src="https://img.shields.io/badge/docs-online-8b5cf6" alt="Documentation"></a>
+  </p>
 </div>
 
 # LLM Dataset Sanitizer PRO
