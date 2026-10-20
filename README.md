@@ -1,8 +1,19 @@
+<div align="center">
+  <img src="https://raw.githubusercontent.com/Yog-Sotho/LLM-Sanitizer-Pro/main/Images/banner.png" alt="LLM Sanitizer PRO: scrub, redact, dedup and curate data for LLM training" width="100%"/>
+</div>
+
 # LLM Dataset Sanitizer PRO
 
 Production-grade, modular dataset sanitization, PII redaction, and curation pipeline for LLM training and fine-tuning.
 
 **Documentation:** <https://yog-sotho.github.io/LLM-Sanitizer-Pro/> (CLI reference, provenance, performance, verifying releases) · [Changelog](https://github.com/Yog-Sotho/LLM-Sanitizer-Pro/blob/main/CHANGELOG.md)
+
+## 🖼️ How it works
+
+<div align="center">
+  <img src="https://raw.githubusercontent.com/Yog-Sotho/LLM-Sanitizer-Pro/main/Images/pipeline.png" alt="Raw records go through parse, PII and secrets redaction, dedup, quality, decontamination and formatting to become a clean dataset" width="750"/>
+  <p><em>Raw data in, training-ready data out: every record passes through the same streaming pipeline.</em></p>
+</div>
 
 ## 🚀 Features
 
@@ -64,6 +75,10 @@ pip install "llm-sanitizer-pro[all]"   # formats, fuzzy dedup, langdetect, trans
 ```
 
 ## 🔨 Usage
+
+<div align="center">
+  <img src="https://raw.githubusercontent.com/Yog-Sotho/LLM-Sanitizer-Pro/main/Images/terminal.png" alt="A sanitize run with the fine-tune profile, secrets redaction, fuzzy dedup and 4 jobs" width="750"/>
+</div>
 
 ```bash
 # Basic PII redaction + exact dedup
@@ -234,3 +249,7 @@ MIT
 ## Author
 
 Yogsotho
+
+<div align="center">
+  <img src="https://raw.githubusercontent.com/Yog-Sotho/LLM-Sanitizer-Pro/main/Images/logo.png" alt="LLM Sanitizer PRO logo" width="220"/>
+</div>
