@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- **Container image** `ghcr.io/yog-sotho/llm-sanitizer-pro:{version,latest}` for
+  `linux/amd64` and `linux/arm64`, published by the release workflow: the `sanitize`
+  CLI with the `[all]` extra, running as an unprivileged user in `/data`. It is
+  signed with Sigstore (keyless) and carries build provenance. A `Docker` workflow
+  builds and smoke-tests it on both architectures for pull requests that change it.
+
 ## 4.1.0 (2026-10-18)
 
 ### Changed

@@ -1,0 +1,51 @@
+name: Docker
+
+# Builds the container image on both architectures the release publishes
+# (without pushing) and smoke-tests it, whenever the image or its inputs change.
+
+on:
+  pull_request:
+    paths:
+      - 'Dockerfile'
+      - '.dockerignore'
+      - 'pyproject.toml'
+      - '.github/workflows/docker.yml'
+      - '.github/workflows/release.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  image:
+    name: image (${{ matrix.platform }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { platform: linux/amd64, runner: ubuntu-24.04 }
+          - { platform: linux/arm64, runner: ubuntu-24.04-arm }
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: hadolint/hadolint-action@v3.5.0
+        with:
+          dockerfile: Dockerfile
+      - uses: docker/setup-buildx-action@v4
+      - uses: docker/build-push-action@v7
+        with:
+          context: .
+          platforms: ${{ matrix.platform }}
+          load: true
+          tags: llm-sanitizer-pro:ci
+      - name: Smoke test
+        run: |
+          set -euo pipefail
+          docker run --rm llm-sanitizer-pro:ci --version
+          test "$(docker run --rm --entrypoint id llm-sanitizer-pro:ci -u)" = "10001"
+          record='{"text":"Please send the quarterly report to alice@example.com before the meeting on Friday afternoon, thanks a lot."}'
+          out="$(printf '%s\n' "$record" | docker run -i --rm llm-sanitizer-pro:ci \
+            --input - --input-format jsonl --output - --output-format jsonl --remove-pii)"
+          echo "$out"
+          grep -q '\[PII_EMAIL\]' <<<"$out"
+          ! grep -q 'alice@example.com' <<<"$out"

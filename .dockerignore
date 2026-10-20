@@ -1,0 +1,8 @@
+# Only pyproject.toml, README.md, LICENSE and sanitizer_pro/ are needed to build.
+*
+!pyproject.toml
+!README.md
+!LICENSE
+!sanitizer_pro/
+**/__pycache__
+**/*.pyc

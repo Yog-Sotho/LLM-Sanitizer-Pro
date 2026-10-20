@@ -74,6 +74,14 @@ pip install "llm-sanitizer-pro[all]"   # formats, fuzzy dedup, langdetect, trans
                                        # semantic, GlotLID and model scorers have their own extras
 ```
 
+Or run it in a container (published for `linux/amd64` and `linux/arm64` from the next
+release on, with the `[all]` extra; mount the folder with your data at `/data`):
+
+```bash
+docker run --rm -v "$PWD:/data" ghcr.io/yog-sotho/llm-sanitizer-pro \
+    --input raw.jsonl --output clean.jsonl --profile fine-tune
+```
+
 ## 🔨 Usage
 
 <div align="center">
