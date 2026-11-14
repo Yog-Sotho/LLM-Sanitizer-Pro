@@ -14,7 +14,7 @@
 # output files can be written into a directory you own. Published images:
 # ghcr.io/yog-sotho/llm-sanitizer-pro:{version,latest} (linux/amd64, linux/arm64).
 
-ARG PYTHON_IMAGE=python:3.12-slim-bookworm@sha256:7753c33391fc9f01d1984375bf375eb6686d52ba10db6043a86634a5ccf90dcf
+ARG PYTHON_IMAGE=python:3.12-slim-bookworm@sha256:935c3c5b12357a7e10caa9c1e6ca5692344d97cf229832ef584be2cec9fc03df
 
 FROM ${PYTHON_IMAGE} AS build
 WORKDIR /src
