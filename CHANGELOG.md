@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+### Security
+
+- The container image's `python:3.12-slim-bookworm` base is re-pinned to the current
+  digest, which carries the fixed OpenSSL (3.0.22-1~deb12u2, CVE-2026-84782). The
+  previous pin shipped 3.0.22-1~deb12u1. Verified on both published architectures
+  (linux/amd64 and linux/arm64).
+
 ## 4.1.1 (2026-10-20)
 
 ### Added
